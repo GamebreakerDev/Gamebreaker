@@ -1,0 +1,242 @@
+diff --git a/src/kernel/nv2a_backend.h b/src/kernel/nv2a_backend.h
+index 87788ed..1fa016e 100644
+--- a/src/kernel/nv2a_backend.h
++++ b/src/kernel/nv2a_backend.h
+@@ -20,14 +20,16 @@
+  * so a back end only ever sees surface pixels. Blend, depth, alpha, cull and
+  * stencil state arrive in Nv2aRenderState.
+  *
+- * ponytail: register-combiner state and texture stages 1-3 are not passed on:
+- * a back end sees stage 0 and the diffuse colour. Extend Nv2aBatch when that
+- * matters rather than adding callbacks.
++ * A back end that only reads Nv2aBatch.texture sees stage 0 and the diffuse
++ * colour. Nv2aBatch.ext carries the rest: all four texture stages, the
++ * register combiners, and each vertex's texture coordinates, specular colour
++ * and fog factor.
+  */
+ #ifndef NV2A_BACKEND_H
+ #define NV2A_BACKEND_H
+ 
+ #include <stdint.h>
++#include "nv2a_combiner.h"
+ 
+ /* The colour surface being drawn into, in real (anti-aliased) pixels.
+  * aa_sx/aa_sy give the anti-aliasing factor, so width/aa_sx is the logical
+@@ -51,6 +53,10 @@ typedef struct {
+      * a linear texture) and the raw SET_TEXTURE_FILTER word (MIN in bits
+      * 16-23). A back end that ignores them samples level 0. */
+     uint32_t levels, filter;
++    /* Guest address of the 256-entry A8R8G8B8 palette of a palettised format
++     * (SET_TEXTURE_PALETTE), 0 when there is none. nv2a_backend_decode_texture
++     * reads it. */
++    uint32_t palette;
+ } Nv2aTexture;
+ 
+ typedef struct {
+@@ -80,13 +86,47 @@ typedef struct {
+      * that ignores these draws that pass over the whole surface. */
+     uint32_t stencil_enable, stencil_func, stencil_ref, stencil_func_mask;
+     uint32_t stencil_write_mask, stencil_fail, stencil_zfail, stencil_zpass;
++    /* SET_WINDOW_CLIP_*, rectangle 0, for draws (clears ignore it): x0 <= x < x1,
++     * y0 <= y < y1 in surface pixels, anti-aliasing factor applied. set: the
++     * title has sent one. exclusive: draws keep outside the rectangle. */
++    uint32_t window_clip_set, window_clip_exclusive;
++    uint32_t window_clip_x0, window_clip_y0, window_clip_x1, window_clip_y1;
+ } Nv2aRenderState;
+ 
++/* What a vertex program wrote besides position and diffuse, for a back end
++ * that evaluates the register combiners itself. */
++typedef struct {
++    /* Texture coordinates of stages 0-3 as the program wrote them (s, t, r,
++     * q), not divided by q. Units follow the stage's texture: normalised for
++     * swizzled and compressed formats, texels for linear ones (see
++     * Nv2aBatchExt.stage_normalized). */
++    float tex[4][4];
++    float specular[4];              /* r, g, b, a */
++    float fog;                      /* fog factor, 1 = no fog */
++} Nv2aVertexExt;
++
++/* The rest of a batch's pixel state: all four texture stages and the
++ * register combiners. With it a back end can reproduce what the CPU
++ * rasteriser draws (nv2a_combiner.c is the reference evaluation); without
++ * it, texture stage 0 times diffuse is all there is. */
++typedef struct {
++    /* count entries, parallel to Nv2aBatch.vertices. NULL for batches that
++     * arrive pre-transformed (no vertex program outputs to report). */
++    const Nv2aVertexExt *vertices;
++    Nv2aTexture stage[4];           /* the texture bound to each stage */
++    uint32_t stage_valid;           /* bit i: stage[i] is usable */
++    uint32_t stage_normalized;      /* bit i: stage i's coordinates are 0..1 */
++    const Nv2aCombiner *combiner;   /* NULL until the title programs them */
++    uint32_t fog_color;             /* SET_FOG_COLOR as sent: red in bits 0-7 */
++    uint32_t clip_plane_mode;       /* SET_SHADER_CLIP_PLANE_MODE */
++} Nv2aBatchExt;
++
+ typedef struct {
+     const Nv2aVertex  *vertices;    /* triangle list: count is a multiple of 3 */
+     uint32_t           count;
+     const Nv2aTexture *texture;     /* NULL: untextured */
+     const Nv2aRenderState *state;
++    const Nv2aBatchExt *ext;        /* never NULL from the executor */
+ } Nv2aBatch;
+ 
+ typedef struct {
+diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
+index a5ea9cc..7c2322a 100644
+--- a/src/kernel/nv2a_pb_exec.c
++++ b/src/kernel/nv2a_pb_exec.c
+@@ -839,6 +839,17 @@ static void current_render_state(Nv2aRenderState *r)
+     r->stencil_fail      = s_reg[0x0370 / 4];        /* SET_STENCIL_OP_FAIL */
+     r->stencil_zfail     = s_reg[0x0374 / 4];        /* SET_STENCIL_OP_ZFAIL */
+     r->stencil_zpass     = s_reg[0x0378 / 4];        /* SET_STENCIL_OP_ZPASS */
++    {
++        uint32_t h = s_reg[0x02C0 / 4], v = s_reg[0x02E0 / 4];   /* rectangle 0 */
++        uint32_t sx = s_gpu.aa_sx > 1.5f ? 2 : 1, sy = s_gpu.aa_sy > 1.5f ? 2 : 1;
++
++        r->window_clip_set       = h != 0 || v != 0;
++        r->window_clip_exclusive = s_reg[0x02B4 / 4] & 1;    /* SET_WINDOW_CLIP_TYPE */
++        r->window_clip_x0        = (h & 0xFFF) * sx;
++        r->window_clip_x1        = (((h >> 16) & 0xFFF) + 1) * sx;
++        r->window_clip_y0        = (v & 0xFFF) * sy;
++        r->window_clip_y1        = (((v >> 16) & 0xFFF) + 1) * sy;
++    }
+ }
+ 
+ static int sample_texture(uint32_t u, uint32_t v, uint32_t *argb);
+@@ -856,7 +867,7 @@ int nv2a_backend_decode_texture(const Nv2aTexture *tex, uint32_t *argb_out)
+     s_gpu.texs[0].color  = tex->color;
+     s_gpu.texs[0].addr_u = 3;
+     s_gpu.texs[0].addr_v = 3;
+-    s_gpu.texs[0].palette = 0;          /* ponytail: no palettised formats */
++    s_gpu.texs[0].palette = tex->palette;
+     s_gpu.texs[0].levels = 1;
+     s_gpu.texs[0].filter = 0;
+     s_gpu.texs[0].cube   = 0;
+@@ -2156,22 +2167,53 @@ static int s_xf_no_tex;
+  * dropped. */
+ #define NV_BACKEND_MAX_VERTS (NV_MAX_INDICES * 3)
+ static Nv2aVertex *s_bverts;     /* about 5.5 MB: allocated by the first vertex */
++static Nv2aVertexExt *s_bext;    /* parallel to s_bverts: Nv2aBatchExt.vertices */
++static int        s_bext_used;   /* this batch's vertices have program outputs */
+ static uint32_t   s_bcount;
+ 
+ static Nv2aVertex *backend_slot(void)
+ {
+-    if (!s_bverts
+-        && !(s_bverts = (Nv2aVertex *)calloc(NV_BACKEND_MAX_VERTS, sizeof *s_bverts)))
+-        return NULL;
++    if (!s_bverts) {
++        s_bverts = (Nv2aVertex *)calloc(NV_BACKEND_MAX_VERTS, sizeof *s_bverts);
++        s_bext = (Nv2aVertexExt *)calloc(NV_BACKEND_MAX_VERTS, sizeof *s_bext);
++        if (!s_bverts || !s_bext) {
++            free(s_bverts);
++            free(s_bext);
++            s_bverts = NULL;
++            s_bext = NULL;
++            return NULL;
++        }
++    }
+     if (s_bcount + 3 > NV_BACKEND_MAX_VERTS)
+         return NULL;
+     return &s_bverts[s_bcount];
+ }
+ 
+-static void backend_from_xf(const Nv2aVshOutput *v, Nv2aVertex *o)
++static float fog_factor(float d);
++
++static void backend_texture(const Texture *t, Nv2aTexture *o)
++{
++    o->offset = t->offset;
++    o->width  = t->width;
++    o->height = t->height;
++    o->pitch  = t->pitch;
++    o->color  = t->color;
++    o->addr_u = t->addr_u;
++    o->addr_v = t->addr_v;
++    o->levels = tex_size_from_format(t->color) ? t->levels : 1;  /* not t->pitch: it is stale on swizzled */
++    o->filter = t->filter;
++    o->palette = t->palette;
++}
++
++static void backend_from_xf(const Nv2aVshOutput *v, Nv2aVertex *o,
++                            Nv2aVertexExt *e)
+ {
+     float su = 1.0f, sv = 1.0f;
+ 
++    memcpy(e->tex, v->tex, sizeof e->tex);
++    memcpy(e->specular, v->d1, sizeof e->specular);
++    e->fog = fog_factor(v->fog[0]);
++
+     if (tex_size_from_format(s_gpu.texs[0].color)) {
+         su = (float)s_gpu.texs[0].width;
+         sv = (float)s_gpu.texs[0].height;
+@@ -2193,6 +2235,8 @@ static void backend_flush(int textured)
+     Nv2aRenderState rs;
+     Nv2aTexture tex;
+     Nv2aBatch batch;
++    Nv2aBatchExt ext;
++    int i;
+ 
+     if (!s_bcount)
+         return;
+@@ -2203,20 +2247,26 @@ static void backend_flush(int textured)
+     batch.texture = NULL;
+     batch.state = &rs;
+     if (textured && s_gpu.texs[0].valid) {
+-        tex.offset = s_gpu.texs[0].offset;
+-        tex.width  = s_gpu.texs[0].width;
+-        tex.height = s_gpu.texs[0].height;
+-        tex.pitch  = s_gpu.texs[0].pitch;
+-        tex.color  = s_gpu.texs[0].color;
+-        tex.addr_u = s_gpu.texs[0].addr_u;
+-        tex.addr_v = s_gpu.texs[0].addr_v;
+-        tex.levels = s_gpu.texs[0].pitch ? 1 : s_gpu.texs[0].levels;
+-        tex.filter = s_gpu.texs[0].filter;
++        backend_texture(&s_gpu.texs[0], &tex);
+         batch.texture = &tex;
+     }
++    memset(&ext, 0, sizeof ext);
++    ext.vertices = s_bext_used ? s_bext : NULL;
++    for (i = 0; i < 4; i++) {
++        backend_texture(&s_gpu.texs[i], &ext.stage[i]);
++        if (s_gpu.texs[i].valid)
++            ext.stage_valid |= 1u << i;
++        if (tex_size_from_format(s_gpu.texs[i].color))
++            ext.stage_normalized |= 1u << i;
++    }
++    ext.combiner = s_gpu.rc_seen ? &s_gpu.rc : NULL;
++    ext.fog_color = s_gpu.fog_color;
++    ext.clip_plane_mode = s_gpu.clip_plane_mode;
++    batch.ext = &ext;
+     s_backend->draw(&surf, &batch);
+     s_gpu.tris_drawn += s_bcount / 3;
+     s_bcount = 0;
++    s_bext_used = 0;
+     note_drawn();
+ }
+ 
+@@ -3071,10 +3121,12 @@ static void raster_xf_triangle(const Nv2aVshOutput *va, const Nv2aVshOutput *vb,
+     if (backend_draws()) {                     /* a back end rasterises */
+         Nv2aVertex *o = backend_slot();
+         if (o) {
+-            backend_from_xf(va, &o[0]);
+-            backend_from_xf(vb, &o[1]);
+-            backend_from_xf(vc, &o[2]);
++            Nv2aVertexExt *e = &s_bext[s_bcount];
++            backend_from_xf(va, &o[0], &e[0]);
++            backend_from_xf(vb, &o[1], &e[1]);
++            backend_from_xf(vc, &o[2], &e[2]);
+             s_bcount += 3;
++            s_bext_used = 1;
+         }
+         return;
+     }
+@@ -4342,6 +4394,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+     case 0x17F8: s_gpu.clip_plane_mode = param; break;
+ 
+     /* Alpha test and fog. */
++    case 0x02B4: case 0x02C0: case 0x02E0:        /* SET_WINDOW_CLIP_*: current_render_state */
++        break;
+     case 0x0300: s_gpu.alpha_test = param; break;
+     case 0x033C: s_gpu.alpha_func = param; break;
+     case 0x0340: s_gpu.alpha_ref = param; break;

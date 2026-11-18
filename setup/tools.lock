@@ -1,0 +1,88 @@
+{
+  "comment": "Every download setup makes. Each is pinned by exact address, size and SHA-256, checked against the publisher's own page on the date given. A file whose size or hash differs is deleted and setup stops. 'dir' is the folder under tools\\ it is unpacked into; 'check' is a file inside it that proves the unpack finished.",
+  "format": 1,
+  "tools": [
+    {
+      "name": "python",
+      "version": "3.14.10",
+      "url": "https://www.python.org/ftp/python/3.14.10/python-3.14.10-embed-amd64.zip",
+      "size": 12619664,
+      "sha256": "90905e64a840557d8c1bc4f5b74db3d7ee85e3ffb217611cac1c7813acea4159",
+      "dir": "python",
+      "check": "python.exe",
+      "publisher_page": "https://www.python.org/downloads/release/python-31410/",
+      "checked": "2026-11-16",
+      "licence": "PSF-2.0",
+      "purpose": "runs the toolkit's lifter (embeddable package: a private Python, isolated from any other)"
+    },
+    {
+      "name": "capstone",
+      "version": "5.0.9",
+      "url": "https://files.pythonhosted.org/packages/50/e6/6f06fdb6a9ed32b2f7cd9c036b92d5324112c3ef7080f2c71efc367d40dd/capstone-5.0.9-py3-none-win_amd64.whl",
+      "size": 1273459,
+      "sha256": "732cedbbb56d42e723f14d7af6387f1454194a820b4b96b56d1e53f865ef85d0",
+      "dir": "capstone",
+      "check": "capstone\\__init__.py",
+      "publisher_page": "https://pypi.org/project/capstone/5.0.9/",
+      "checked": "2026-11-16",
+      "licence": "BSD-3-Clause",
+      "purpose": "the disassembler library the lifter uses (a wheel is a zip; it is unpacked, not installed)"
+    },
+    {
+      "name": "llvm-mingw",
+      "version": "20261104",
+      "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/llvm-mingw-20261104-ucrt-x86_64.zip",
+      "size": 191037046,
+      "sha256": "552191b5754c49a5a20723276a6fc56541ea1922c4c50b7b669022333fc1b40f",
+      "dir": "llvm-mingw",
+      "check": "llvm-mingw-20261104-ucrt-x86_64\\bin\\x86_64-w64-mingw32-clang.exe",
+      "bin": "llvm-mingw-20261104-ucrt-x86_64\\bin",
+      "publisher_page": "https://github.com/mstorsjo/llvm-mingw/releases/tag/20261104",
+      "checked": "2026-11-15",
+      "licence": "Apache-2.0 WITH LLVM-exception, plus MinGW-w64 and others (see its LICENSE.TXT)",
+      "purpose": "the C compiler, linker and Windows headers (Clang)"
+    },
+    {
+      "name": "ninja",
+      "version": "1.13.2",
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip",
+      "size": 291570,
+      "sha256": "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65",
+      "dir": "ninja",
+      "check": "ninja.exe",
+      "publisher_page": "https://github.com/ninja-build/ninja/releases/tag/v1.13.2",
+      "checked": "2026-11-15",
+      "licence": "Apache-2.0",
+      "purpose": "runs one compiler per processor core"
+    },
+    {
+      "name": "cmake",
+      "version": "4.4.5",
+      "url": "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-windows-x86_64.zip",
+      "size": 54412232,
+      "sha256": "326c826486d46a23cf9d5a1c9ee3a567d427bdd02c4a34071937a2a675cff004",
+      "dir": "cmake",
+      "check": "cmake-4.4.5-windows-x86_64\\bin\\cmake.exe",
+      "publisher_page": "https://github.com/Kitware/CMake/releases/tag/v4.4.5",
+      "checked": "2026-11-16",
+      "licence": "BSD-3-Clause",
+      "purpose": "reads port\\CMakeLists.txt and writes the build plan Ninja runs"
+    },
+    {
+      "name": "xboxrecomp",
+      "version": "343b6d8",
+      "url": "https://github.com/sp00nznet/xboxrecomp/archive/343b6d8901723b37ce568b2418c5df4e1fe1d223.zip",
+      "size": 2381027,
+      "verify": "tree",
+      "tree_sha256": "fe1fad35cf0a6c1bc14104e5359ecd4268bd031699e132736392713fd9b1f677",
+      "tree_files": 671,
+      "tree_root": "xboxrecomp-343b6d8901723b37ce568b2418c5df4e1fe1d223",
+      "dir": "xboxrecomp",
+      "check": "xboxrecomp-343b6d8901723b37ce568b2418c5df4e1fe1d223\\LICENSE",
+      "publisher_page": "https://github.com/sp00nznet/xboxrecomp/tree/343b6d8901723b37ce568b2418c5df4e1fe1d223",
+      "checked": "2026-11-16",
+      "licence": "MIT (parts derived from xemu: LGPL-2.1-or-later; see its NOTICE)",
+      "purpose": "the static recompilation toolkit (lifter and runtime) at the pinned commit; our patch is applied to a copy. GitHub does not promise the archive's bytes, so the archive's size and hash are not checked: the unpacked files are, by tree_sha256 (setup\\tree_hash.ps1)"
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+# Embedded byte for byte in Gamebreaker.exe: keep the same line endings in
+# every checkout and in git archive, so the build stays reproducible.
+* text eol=lf

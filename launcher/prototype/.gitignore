@@ -1,0 +1,6 @@
+# Fetched or made at run time; never tracked.
+lib/
+.webview/
+last-run.txt
+state.json
+state.json.tmp

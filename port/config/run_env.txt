@@ -1,0 +1,17 @@
+# The runtime switches the game needs to work at all. The build compiles this
+# list into the program, which sets each one the environment has not set. The
+# comment on each line says what goes wrong without it.
+#
+# Format: NAME=value, one a line; '#' starts a comment. A line ending in
+# "[cpu]" is for the CPU rasteriser only and is left out when the game draws
+# with Direct3D 11.
+
+RECOMP_PB_EXEC=1          # execute the pushbuffer D3D writes (it is linked into the game)
+RECOMP_FB_WINDOW=1 [cpu]  # show the guest framebuffer in a window; the Direct3D 11 back end has its own
+RECOMP_AC97_READY=1       # emulated audio chip; without it DirectSound start-up faults
+RECOMP_TITLE_KEVENTS=1    # events XAPI/D3D build by hand; without it the XAPI timer thread spins and game time stalls
+RECOMP_VBLANK=paced       # 60 Hz vblank interrupt; D3D blocks on it once the events above are real
+RECOMP_HEAP_RECLAIM=1     # reuse freed guest memory; without it D3D's per-screen textures fill the 64 MB contiguous window (crash at team select)
+RECOMP_GUEST_CPUS=2       # all game threads on one core, as on the console; EA's stream manager (0x001D9CC0) reads its queue outside its lock and crashes the movie decoder otherwise
+RECOMP_USB=1              # emulated USB controller with a pad on it; needs xbox_OhciInit() in main.c
+RECOMP_KEYBOARD=1         # keyboard also drives that pad: Enter START, Z/X/C/V = A/B/X/Y, arrows D-pad, WASD left stick

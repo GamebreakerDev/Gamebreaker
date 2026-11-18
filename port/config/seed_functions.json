@@ -1,0 +1,57 @@
+[
+ {
+  "start": "0x00149FD0",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x001A72D0",
+  "observed": true,
+  "note": "PsCreateSystemThreadEx StartContext1 observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x001B2AF0",
+  "observed": true,
+  "note": "PsCreateSystemThreadEx StartContext1 observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x001CAD85",
+  "observed": true,
+  "note": "PsCreateSystemThreadEx StartContext1 observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x001CAE9D",
+  "observed": true,
+  "note": "PsCreateSystemThreadEx StartContext1 observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x001C6530",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x001A4D70",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x001D3DC0",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x001A5260",
+  "observed": false,
+  "note": "Not observed at runtime. Entry of the pointer table at 0x002B85C8 that also holds the observed 0x001A4D70 and 0x001A52A0; same prologue; preceded by padding."
+ },
+ {
+  "start": "0x001D3E62",
+  "observed": false,
+  "note": "Not observed at runtime. Entry of the CRT maths table at 0x002C0E9C that also holds the observed 0x001D3DC0; decodes as a function body."
+ },
+ {
+  "start": "0x001A52A0",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ }
+]

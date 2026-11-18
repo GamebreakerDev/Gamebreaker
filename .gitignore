@@ -1,0 +1,102 @@
+# ---------------------------------------------------------------------------
+# CODE ONLY. Nothing derived from the game may ever be committed.
+# ---------------------------------------------------------------------------
+
+# Disc images (dump your own disc)
+*.iso
+*.xiso
+*.cso
+*.img
+*.bin
+disc/
+
+# Extracted game files and executables
+game_files/
+game/
+*.xbe
+*.xip
+
+# Lifter output: C generated from the game's code. Regenerate from your own XBE.
+port/src/recomp/gen/
+**/recomp/gen/
+
+# Analysis output derived from the game's code (disassembly, function lists)
+*_analysis.json
+tools_output/
+**/disasm/output/
+**/func_id/output/
+**/abi_analysis/output/
+
+# The toolkit is its own repository (cloned separately; may become a submodule)
+xboxrecomp/
+
+# Build artifacts
+build/
+build-*/
+out/
+bin/
+*.obj
+*.o
+*.lib
+*.a
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.exp
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Visual Studio / IDE
+.vs/
+.vscode/
+.idea/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+Debug/
+Release/
+x64/
+
+# Runtime logs and dumps (they contain addresses and strings from the game)
+port/runs/
+stderr.txt
+*.log
+*.dmp
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local, per-PC settings for scripted runs (they can name someone's hardware)
+port/local.env
+
+# Fetched compiler and build tools (port/tools/fetch_toolchain.ps1)
+toolchain/
+
+# The install folder setup remembers (setup/setup.ps1); per PC
+setup/folder.txt
+
+# Save files and the game's own log (gb_save.c): game-derived, per PC
+saves/
+logs/
+# F12 pictures (gb_overlay.c): game artwork
+screenshots/
+*.sav
+*.xbx
+
+
+# The release signing key's private half must never be committed
+release-signing.key
+*.key
+*.pem
+*.pfx
+*.p12
