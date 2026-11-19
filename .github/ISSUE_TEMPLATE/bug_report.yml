@@ -1,0 +1,57 @@
+name: Report a problem
+description: A crash, a freeze, a picture or sound fault, or something that fails during setup.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [known issues](https://github.com/GamebreakerDev/Gamebreaker/blob/main/docs/KNOWN-ISSUES.md) first. Please do not attach game files or ask where to get disc images.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: The mode, court and screen, and what you pressed. Say if it happens every time.
+      placeholder: |
+        1. Pick Up Game, Rucker Park
+        2. Pause during a replay
+        3. The game closes
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it happened
+      options:
+        - In the game
+        - In the launcher
+        - During setup or the build
+        - During an update
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: >
+        For a problem in the game, drag `logs\game.log` from your install folder into this box.
+        For setup, the launcher or an update, press Copy logs under Settings, Advanced and paste the result.
+        The log holds the version, your Windows version, processor, graphics card and settings.
+    validations:
+      required: true
+  - type: input
+    id: input
+    attributes:
+      label: Controller or keyboard
+      placeholder: Xbox Series controller over USB
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Screenshots are welcome. F12 saves one to the `screenshots` folder.
