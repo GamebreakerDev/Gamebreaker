@@ -164,6 +164,8 @@ contributors (MIT), whose sound and graphics chip models include parts of
 
 [Changelog](CHANGELOG.md)&emsp;[Building from source](docs/BUILDING.md)&emsp;[Contributing](CONTRIBUTING.md)
 
+<a href="https://playported.com/ports/2133-nba-street-vol-2/"><img src="https://playported.com/badge.svg" alt="Listed on PlayPorted"></a>
+
 ## Legal
 
 Gamebreaker is an unofficial fan project, not affiliated with or endorsed by
