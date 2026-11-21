@@ -90,6 +90,10 @@ saves/
 logs/
 # F12 pictures (gb_overlay.c): game artwork
 screenshots/
+# The player's mods (gb_mods.c): replaced game files
+mods/
+# The maker's texture dump (gb_textures.c): the game's own textures
+texture_dump/
 *.sav
 *.xbx
 

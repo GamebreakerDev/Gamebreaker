@@ -5,6 +5,79 @@ What changes for a player in each release, newest first. The format follows
 
 ## Unreleased
 
+## 0.1.1 - 2026-11-21
+
+- New default keyboard layout, made for playing: W A S D move; K pass, L
+  shoot, J trick move or steal, I block or rebound (the controller's own
+  diamond); Left Shift is one turbo, Space two, and the semicolon key all
+  three; U strategy; Q and E pocket and cancel the Gamebreaker; Enter pauses;
+  Esc or Backspace goes back. Keys you changed before are kept. The launcher's
+  Keyboard page shows the turbo keys as "1 turbo", "2 turbos" and "3 turbos".
+- Updates finish sooner: after an update the launcher recompiles only the files
+  that changed, not the whole game. The first update after 0.1.0 still
+  recompiles everything once.
+- The game program's Properties show its release version.
+- Mods: files in a `mods` folder beside the saves are read in place of the
+  disc's, one folder per mod, in the order `mods\load_order.txt` lists them.
+  The save is copied to the backups first whenever the mods in use change.
+- The launcher has a Mods page: install a mod from its .zip (a file picker, or
+  drop the zip on the window), switch mods on and off, set their order, see
+  which files each one replaces and which mods clash, remove a mod, and turn
+  all mods off for the next start. Zips that would put files outside the mod's
+  folder or that contain programs are refused.
+- Matches need less processor time: the graphics work done on the processor
+  works out each corner of a 3D model once per draw instead of every time the
+  draw uses it. The picture is the same. Slower processors hold 60 frames a
+  second more often.
+- On processors with performance and efficiency cores (recent Intel laptops and
+  desktops), the game keeps its busiest work on the performance cores and asks
+  Windows not to slow it down to save power. Other processors are unchanged.
+- On a PC whose only graphics are built into the processor, the launcher starts
+  with Resolution 1x, Anti-aliasing 2x and Texture filtering 4x. Values you
+  chose yourself are kept, and PCs with a graphics card keep Fit, 4x and 16x.
+- Mods can replace a single piece of one of the game's archives (for example
+  one texture of a court) without carrying the whole archive:
+  `mods\<mod>\xf\forest.viv\foresto.xsh`, or the piece's number for archives
+  without names (`mods\<mod>\xf\xf000002\417.xsh`).
+  Package files such as `manifest.json`, `icon.png` and `README.md` are
+  skipped, and `logs\game.log` says why any file of a mod was not used.
+- Mods can change one menu picture or one line of on-screen text without
+  carrying the whole pack it lives in: `mods\<mod>\fe\xafescrn.bin\0.shpx`
+  for a picture, `mods\<mod>\locale\xloc_fe.eus\mainmenu.txt\1.txt` holding
+  the new text for a line. Two mods can change different lines of the same
+  pack.
+- Mods can replace any picture the game draws without touching its files: a
+  PNG or DDS in the mod's `textures` folder, named by the picture's
+  fingerprint, is drawn in its place, at any size (four times the original
+  looks sharp at higher resolutions). To find the one to replace, press
+  Ctrl + F9 in the game: every picture the game draws from then on is
+  written once to a `texture_dump` folder under its fingerprint, until
+  Ctrl + F9 again. The launcher's Settings, Advanced, "Texture dump" starts
+  the game with it on.
+- The Mods page lists single pieces, menu pictures, lines of text and pictures
+  named by fingerprint among a mod's files, installs a mod of pictures only,
+  and shows a clash when two mods change the same piece, line or picture,
+  whether each names it by name or by number. A piece the archive does not
+  have, or one the game left out at its last start, is dimmed with the reason.
+- The game no longer keeps a processor core fully busy while it waits for the
+  picture to be drawn: in a match it uses about half the processor time it
+  did, at 60 and at 120 frames a second, which helps laptops stay cool. The
+  frame rate is unchanged.
+- With the crackle fix on, the sound recovers at once if Windows holds back the
+  game's sound service, instead of falling to a tenth of its pace until the
+  hold ends.
+- Launcher: the Check now button on the Updates page, and the update notice
+  beside the ring, no longer flicker when the pointer rests on them.
+- Launcher: on a laptop with two graphics chips, the "This PC" list names the
+  chip the game draws on (the dedicated one, unless Windows has stopped it),
+  not the built-in one.
+- Launcher: Restore backup also lists the copies of the save made before a
+  change of mods, marked "before mods changed".
+- Launcher: the menu keeps the current page selected while a confirmation
+  (such as removing a mod) is open.
+- Launcher: when an install, download or build finishes, the ring runs back to
+  empty and its colour fades back, instead of switching at once.
+
 ## 0.1.0 - 2026-11-18
 
 The first public release.

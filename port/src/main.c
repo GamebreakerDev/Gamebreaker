@@ -39,6 +39,7 @@
 #include "gb_d3d11.h"
 #include "gb_save.h"        /* save folder, backups, log file, fatal-error box */
 #include "gb_log.h"         /* the log for bug reports */
+#include "gb_mods.h"        /* the player's replacement files */
 
 /* Defined in the lifter's generated src/recomp/gen/recomp_dispatch.c. */
 int recomp_dispatch_init(void);
@@ -454,6 +455,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     /* Before anything reads a switch (the toolkit reads them with getenv as
      * it starts each part). */
+    /* On a hybrid processor, a fast core for the guest threads before the
+     * defaults would set the fixed one (src/gb_cpu.c). */
+    {
+        extern void gb_cpu_boot(void);
+        gb_cpu_boot();
+    }
     int defaults_set = gb_apply_default_switches();
     gb_skip_intro_pad_setup();
     {
@@ -492,6 +499,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     }
 
     gb_log_header();
+    {
+        extern void gb_cpu_log(void);
+        gb_cpu_log();
+    }
     {
         int guard = 1;
         if (guard)
@@ -573,6 +584,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         /* gb_save.c: the port's own save folder (RECOMP_SAVE_DIR, which the
          * toolkit reads here), and a backup of the save. */
         gb_save_init();
+        gb_mods_init();     /* gb_mods.c: the player's replacement files */
+        {
+            extern void gb_mouse_init(void);
+            gb_mouse_init(); /* gb_mouse.c: the mouse in menus */
+        }
         xbox_path_init(YOUR_GAME_DIR, NULL);
     }
 

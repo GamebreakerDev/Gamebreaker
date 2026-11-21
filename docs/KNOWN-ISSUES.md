@@ -13,10 +13,6 @@ welcome as issues.
 
 ## Picture
 
-- **On laptops the frame rate can fall below 60 when the machine is hot or
-  busy.**
-- **One processor core at 100% is normal for now.** The game keeps one core
-  fully busy the whole time it runs, however light the scene is.
 - **Frame rate 120 is experimental.** The game keeps its normal speed, but busy
   match views may show fewer than 120 pictures a second. The score display's
   meters, effects and most menu animations are unchecked at this rate.
@@ -31,8 +27,10 @@ welcome as issues.
 
 - **Four-player controllers** is experimental and off by default, and has not
   been tried with real controllers.
-- **The default keyboard layout is basic.** It works, but it was not designed
-  for comfort. The launcher's Keyboard page changes any key.
+- **Keys follow the letters printed on them, not their place.** On a keyboard
+  that is not laid out like a US one (AZERTY, for example), W A S D and the
+  other default keys sit in other places. The launcher's Keyboard page changes
+  any key.
 - PlayStation and Switch controllers work only through a layer that presents
   them as Xbox controllers (for example Steam Input).
 
@@ -53,6 +51,14 @@ welcome as issues.
 - Of the cheats, only Big Heads, the two balls and No Hud are confirmed working
   in a match.
 
+## Mods
+
+- Mods are new in 0.1.1. Replaced court textures, pictures, menu text, songs,
+  menu films and rosters have been tried; replaced models, fonts, sound banks,
+  commentary and animation have not. [Making a mod](MODDING.md) marks what is untested.
+- A save made with a roster mod and loaded without it, or with another one,
+  may point at different players in custom teams and created players.
+
 ## Setup and the launcher
 
 - Windows 10, AMD graphics and Intel graphics on their own are untested.
@@ -68,4 +74,6 @@ welcome as issues.
 - With Windows' Smart App Control on, setup builds and runs a small test
   program first and stops if Windows blocks it. This is untested with the
   feature on.
-- The launcher's update check has not yet delivered a real update.
+- **The first update from 0.1.0 rebuilds the whole game once**, which takes a
+  few minutes, about as long as the first setup's build. Later updates
+  recompile only the files that changed.

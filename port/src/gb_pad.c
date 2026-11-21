@@ -71,6 +71,12 @@ static ULONGLONG now_ms(void)
     return (ULONGLONG)(t.QuadPart * 1000 / s_qpf.QuadPart);
 }
 
+/* With the layer off: may the host's pads (XInput, or test pads standing in
+ * for it) be read and rumbled? Not in a background run, by the layer's rule. */
+static int host_pads_allowed(void)
+{
+}
+
 
 
 /* ======================================================================== */
@@ -365,11 +371,18 @@ static int keyboard_poll(int player, XBOX_INPUT_STATE *out)
 static BOOL s_toolkit_connected[XBOX_MAX_CONTROLLERS];
 
 /* GB_PADS=0: xinput_device.c's Windows path at 343b6d8, without RECOMP_MKB. */
+static int toolkit_read(DWORD port, XINPUT_STATE *xs)
+{
+    if (!host_pads_allowed())
+        return 0;
+    return XInputGetState(port, xs) == ERROR_SUCCESS;
+}
+
 static DWORD toolkit_get_state(DWORD port, XBOX_INPUT_STATE *st)
 {
     XINPUT_STATE xs;
     GbHostPad h;
-    if (XInputGetState(port, &xs) != ERROR_SUCCESS) {
+    if (!toolkit_read(port, &xs)) {
         s_toolkit_connected[port] = FALSE;
         if (port == 0) {
             /* The keyboard stands in for an absent pad. */
@@ -413,13 +426,63 @@ void xbox_InputInit(void)
     gb_pad_boot();
 }
 
+/* gb_mouse.c: the mouse in menus presses pad 1's buttons (GB_MOUSE_MENUS). */
+int  gb_mouse_enabled(void);
+int  gb_mouse_pad(uint16_t *buttons, uint8_t *analog_a, uint8_t *analog_b);
+void gb_mouse_other_input(void);
+
+/* Pad 1 as the controller or keyboard left it, plus the mouse's press. A
+ * press of the player's own hides the menu pointer. */
+static DWORD mouse_merge(DWORD rc, XBOX_INPUT_STATE *st)
+{
+    static DWORD packet;
+    const XBOX_GAMEPAD *g = &st->Gamepad;
+    uint16_t buttons;
+    uint8_t a, b;
+    int i, pressed;
+    if (rc != ERROR_SUCCESS)
+        memset(st, 0, sizeof *st);
+    pressed = rc == ERROR_SUCCESS && (g->wButtons != 0
+              || g->sThumbLX > 12000 || g->sThumbLX < -12000
+              || g->sThumbLY > 12000 || g->sThumbLY < -12000);
+    for (i = 0; rc == ERROR_SUCCESS && i < 8; i++)
+        if (g->bAnalogButtons[i] > 30)
+            pressed = 1;
+    if (pressed)
+        gb_mouse_other_input();
+    buttons = st->Gamepad.wButtons;
+    a = st->Gamepad.bAnalogButtons[XBOX_BUTTON_A];
+    b = st->Gamepad.bAnalogButtons[XBOX_BUTTON_B];
+    if (!gb_mouse_pad(&buttons, &a, &b))
+        return rc;
+    st->Gamepad.wButtons = buttons;
+    st->Gamepad.bAnalogButtons[XBOX_BUTTON_A] = a;
+    st->Gamepad.bAnalogButtons[XBOX_BUTTON_B] = b;
+    if (rc != ERROR_SUCCESS)
+        st->dwPacketNumber = ++packet;    /* no controller: the mouse alone is pad 1 */
+    else
+        st->dwPacketNumber += 0x10000u * (buttons != 0);   /* a new packet when the mouse presses */
+    return ERROR_SUCCESS;
+}
+
+static DWORD get_state(DWORD dwPort, XBOX_INPUT_STATE *pState);
+
 DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+{
+    DWORD rc;
+    if (dwPort >= XBOX_MAX_CONTROLLERS || !pState)
+        return ERROR_DEVICE_NOT_CONNECTED;
+    rc = get_state(dwPort, pState);
+    if (dwPort == 0 && gb_mouse_enabled())
+        rc = mouse_merge(rc, pState);
+    return rc;
+}
+
+static DWORD get_state(DWORD dwPort, XBOX_INPUT_STATE *pState)
 {
     int player, slot, got = 0;
     XBOX_GAMEPAD g;
 
-    if (dwPort >= XBOX_MAX_CONTROLLERS || !pState)
-        return ERROR_DEVICE_NOT_CONNECTED;
     if (!s_booted)
         gb_pad_boot();                    /* main.c calls it first; this is a fallback */
     if (!s_mode)
@@ -458,6 +521,8 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
         return ERROR_DEVICE_NOT_CONNECTED;
     if (!s_mode) {
         XINPUT_VIBRATION xv;
+        if (!host_pads_allowed())
+            return ERROR_DEVICE_NOT_CONNECTED;
         xv.wLeftMotorSpeed = pVibration->wLeftMotorSpeed;
         xv.wRightMotorSpeed = pVibration->wRightMotorSpeed;
         return XInputSetState(dwPort, &xv);
@@ -492,7 +557,7 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
     if (dwPort >= XBOX_MAX_CONTROLLERS || !pCaps)
         return ERROR_DEVICE_NOT_CONNECTED;
     slot = s_mode ? s_table.slot[dwPort] : (int)dwPort;
-    if (slot < 0)
+    if (slot < 0 || (!s_mode && !host_pads_allowed()))
         return ERROR_DEVICE_NOT_CONNECTED;
     if (XInputGetCapabilities((DWORD)slot, dwFlags, &xc) != ERROR_SUCCESS)
         return ERROR_DEVICE_NOT_CONNECTED;

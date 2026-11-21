@@ -39,6 +39,37 @@ int gb_pad_preset_from_name(const char *name)
     return -1;
 }
 
+/* The default keyboard layout ("Turbo count"): W A S D move, the four face
+ * buttons on I J K L in the pad's own diamond (I top = Y, J left = X,
+ * K bottom = A, L right = B), and three turbo keys that say how many turbos:
+ * the game counts held turbos ("any", "two", "all") and never asks which one,
+ * so Left Shift presses one trigger, Space both, and the semicolon key both
+ * triggers and the left stick click (the third turbo). At most four keys are
+ * ever held for any move, which ordinary keyboards register. */
+static const struct { int control; const char *keys; } k_default_keys[] = {
+    { INPUT_DPAD_UP, "up" }, { INPUT_DPAD_DOWN, "down" },
+    { INPUT_DPAD_LEFT, "left" }, { INPUT_DPAD_RIGHT, "right" },
+    { INPUT_START, "enter" }, { INPUT_BACK, "backspace, escape" },
+    { INPUT_LEFT_THUMB, "semicolon" }, { INPUT_RIGHT_THUMB, "U" },
+    { INPUT_A, "K" }, { INPUT_B, "L" }, { INPUT_X, "J" }, { INPUT_Y, "I" },
+    { INPUT_BLACK, "E" }, { INPUT_WHITE, "Q" },
+    { INPUT_LEFT_TRIGGER, "lshift, space, semicolon" },
+    { INPUT_RIGHT_TRIGGER, "space, semicolon" },
+    { INPUT_LSTICK_UP, "W, numpad8" }, { INPUT_LSTICK_DOWN, "S, numpad2" },
+    { INPUT_LSTICK_LEFT, "A, numpad4" }, { INPUT_LSTICK_RIGHT, "D, numpad6" },
+    { INPUT_RSTICK_UP, "T" }, { INPUT_RSTICK_DOWN, "G" },
+    { INPUT_RSTICK_LEFT, "F" }, { INPUT_RSTICK_RIGHT, "H" },
+};
+
+void gb_pad_keys_defaults(InputBindings *b)
+{
+    size_t i;
+    memset(b, 0, sizeof *b);
+    b->diagonal = INPUT_DIAGONAL_FULL;   /* as the toolkit's map */
+    for (i = 0; i < sizeof k_default_keys / sizeof k_default_keys[0]; i++)
+        xbox_InputMap_BindingsParse(b, k_default_keys[i].control, k_default_keys[i].keys);
+}
+
 void gb_pad_config_defaults(GbPadConfig *c)
 {
     int i;
@@ -53,7 +84,7 @@ void gb_pad_config_defaults(GbPadConfig *c)
         p->map.deadzone_right = 0;
         p->map.trigger_threshold = 12;
         p->rumble_pct = 100;
-        xbox_InputKeyboardBindings(&p->keys);
+        gb_pad_keys_defaults(&p->keys);
     }
     c->order = GB_ORDER_AUTO;
     c->keyboard_player = 1;

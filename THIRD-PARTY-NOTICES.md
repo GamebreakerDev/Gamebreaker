@@ -1,7 +1,13 @@
 # Third-party notices
 
-Gamebreaker's own code is under the MIT licence in `LICENSE`. This file lists
-the work it builds on and the notices that travel with it.
+Gamebreaker's own code is under the MIT licence in `LICENSE`. That licence
+covers the code and documents in this repository only. It grants no rights in
+the game this project is for, its program, data, names or marks, which belong
+to their owners. Some files derive from the xboxrecomp toolkit and carry its
+MIT notice as well (below).
+
+This file lists the work Gamebreaker builds on and the notices that travel with
+it.
 
 ## xboxrecomp (MIT)
 
@@ -23,7 +29,7 @@ covered by its notice below:
 | `port/src/recomp_manual.c` | Started from `templates/new-game/src/recomp_manual.c` |
 | `port/CMakeLists.txt` | Started from `templates/new-game/CMakeLists.txt` |
 | `port/.gitignore` | The template's file, unchanged |
-| `port/patches/0001-backend-batch-ext.patch` | A change to `src/kernel/nv2a_backend.h` and `src/kernel/nv2a_pb_exec.c`; its context lines are the toolkit's code |
+| `port/patches/0001-backend-batch-ext.patch` | A change to `src/kernel/nv2a_backend.h`, `nv2a_pb_exec.c`, `nv2a_vsh_interp.c`, `nv2a_vsh_interp.h` and `xbox_memory_layout.c`; its context lines are the toolkit's code |
 | `port/src/gb_d3d11.c` | Its pixel shader follows the toolkit's register-combiner evaluator, `src/kernel/nv2a_combiner.c` |
 | `port/src/gb_pad.c`, `port/src/gb_pad_logic.c` | Replace the toolkit's `src/input/xinput_device.c`; the default controller path reproduces that file's Windows code |
 

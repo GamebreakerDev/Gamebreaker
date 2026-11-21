@@ -8,6 +8,7 @@ const char *gb_log_path(void);              /* "" when the log goes nowhere know
 
 void gb_save_init(void);                    /* main.c, before xbox_path_init */
 const char *gb_save_root(void);             /* the folder holding UDATA */
+int gb_save_backup_tagged(const char *why); /* backups\<date time>_<why>\; 0 when there is no save */
 
 void gb_save_write_begin(void);             /* the save writer's wrapper (recomp_manual.c) */
 void gb_save_write_end(void);

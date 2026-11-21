@@ -137,6 +137,9 @@ variables the launcher sets; they work the same from a prompt:
 | `GB_SAVE_DIR`, `GB_LOG_DIR` | where saves and `game.log` go |
 | `GB_SAVE_BACKUPS` | how many dated copies of the save to keep (default 5, 0 for none) |
 | `GB_SCREENSHOT_DIR` | where F12 saves pictures (default: `screenshots` beside the save folder) |
+| `GB_MODS` | 0 to start with every mod off |
+| `GB_MODS_DIR` | the mods folder (default: `mods` beside the save folder) |
+| `GB_TEXTURE_DUMP` | 1 to start with the texture dump on, writing to `texture_dump` beside the save folder, or a folder to write to instead |
 
 The volumes are a percentage of the game's own level and stack with the
 sliders in the game's Options screen. The game options (pause, rumble, songs,
@@ -144,7 +147,7 @@ replays, demo) override the game's own setting for the run; leave them unset
 to keep the in-game controls in charge.
 
 Alt+Enter or F11 switches between window and fullscreen while it runs. F12
-saves a screenshot.
+saves a screenshot. Ctrl+F9 switches the texture dump on and off.
 
 ## How the port is put together
 
@@ -155,7 +158,10 @@ saves a screenshot.
   interface), `gb_overlay.c` (the start screen, corner mark, frame counter and
   screenshots), `gb_bgsound.c` (sound in the background), `gb_pad.c`
   (controllers), `gb_save.c` (save folder, backups,
-  the write guard, the log file and the error box).
+  the write guard, the log file and the error box), `gb_mods.c` (the mods
+  folder, archive and pack pieces), `gb_textures.c` (pictures replaced by
+  fingerprint, the texture dump), `gb_cpu.c` (thread placement on processors
+  with performance and efficiency cores).
 - `port\config\seed_functions.json` lists function addresses the
   disassembler cannot find by itself (reached only through pointers).
 - Fixes belong in `port\`: wrap or replace the game function, or use one of

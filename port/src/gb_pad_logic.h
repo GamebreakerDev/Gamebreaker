@@ -43,8 +43,11 @@ typedef struct GbPadConfig {
 /* The defaults: preset original, dead zone 0
  * (the game has its own), trigger threshold 12 % (30 of 255), rumble 100 %,
  * order auto, keyboard on player 1, no background input, four pads; every
- * player's keys are the toolkit's keyboard map (keyboard.c). */
+ * player's keys are gb_pad_keys_defaults' layout. */
 void gb_pad_config_defaults(GbPadConfig *c);
+
+/* The default keyboard layout ("Turbo count"; table in gb_pad_logic.c). */
+void gb_pad_keys_defaults(InputBindings *b);
 
 /* Set one player's sources to a preset (the dead zones and thresholds are
  * left alone). Returns 0, or -1 for an unknown name. */

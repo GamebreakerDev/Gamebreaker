@@ -82,7 +82,7 @@ index 87788ed..1fa016e 100644
  
  typedef struct {
 diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
-index a5ea9cc..7c2322a 100644
+index a5ea9cc..7c316cc 100644
 --- a/src/kernel/nv2a_pb_exec.c
 +++ b/src/kernel/nv2a_pb_exec.c
 @@ -839,6 +839,17 @@ static void current_render_state(Nv2aRenderState *r)
@@ -231,7 +231,99 @@ index a5ea9cc..7c2322a 100644
          }
          return;
      }
-@@ -4342,6 +4394,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+@@ -3321,15 +3373,89 @@ static void xf_set_viewport(void)
+     s_xf_o[2] = of[2];
+ }
+ 
++/* Repeat-vertex cache (Gamebreaker patch). A batch names many vertices more
++ * than once (strip joins, shared corners of a mesh): 41 to 46% of the indices
++ * of a match are repeats within their batch. Within one call of
++ * raster_batch_program the result of transform_vertex depends only on the
++ * index, because everything else it reads is fixed for the whole call:
++ *   - the attribute formats, offsets and strides, and the immediate values of
++ *     attributes with no array (s_gpu.attr, s_gpu.imm_attr);
++ *   - the program and the 192 constants (methods are only processed between
++ *     batches, by this thread), unless the program may write c[] back
++ *     (_CXT_WRITE_EN): then a later vertex can see other constants, and the
++ *     cache is not used for that batch;
++ *   - the interpreter's own registers, cleared for every vertex
++ *     (vsh_init_regs), so no vertex sees another's temporaries;
++ *   - the fixed-function matrix, lights and registers (ffp_vertex);
++ *   - the surface scale (aa_sx, aa_sy) and the inline payload.
++ * The vertex data in guest memory can be rewritten by the game while a batch
++ * is transformed; taking the first result for a repeat is the same as reading
++ * both at that moment, which is what the hardware's own post-transform cache
++ * does. So a repeat takes a copy of the first transform of that index in the
++ * same batch. The tag is the batch's serial number and the index, so an entry
++ * from any earlier batch never matches; a slot is a direct-mapped entry by
++ * the index's low bits, and two indices that share it only cost a transform.
++ * RECOMP_XF_CACHE=0 turns it off; RECOMP_XF_CACHE=check transforms every
++ * repeat again and compares the bytes with the copy it would have used. */
++#define XF_CACHE_SIZE 4096u                   /* a power of two */
++static struct { uint32_t batch, index, slot; } s_xfc[XF_CACHE_SIZE];
++static uint32_t s_xfc_batch;
++static int s_xfc_mode = -1;                   /* 0 off, 1 on, 2 on and checked */
++static uint64_t s_xfc_idx, s_xfc_hits, s_xfc_checked, s_xfc_diff;
++
++static int xf_cache_mode(void)
++{
++    if (s_xfc_mode < 0) {
++        const char *e = getenv("RECOMP_XF_CACHE");
++        s_xfc_mode = !e ? 1 : e[0] == '0' ? 0 : strcmp(e, "check") == 0 ? 2 : 1;
++        fprintf(stderr, "[XF-CACHE] repeat-vertex cache %s\n",
++                s_xfc_mode == 0 ? "off" : s_xfc_mode == 2 ? "on, every repeat checked" : "on");
++    }
++    return s_xfc_mode;
++}
++
+ static void raster_batch_program(void)
+ {
+     uint32_t i, n = s_gpu.idx_count;
++    int cache = xf_cache_mode() && !(batch_uses_program() && nv2a_vsh_cxt_write());
+ 
+     if (!s_xf && !(s_xf = (Nv2aVshOutput *)calloc(NV_MAX_INDICES, sizeof *s_xf)))
+         return;
+-    for (i = 0; i < n; i++)
+-        if (!transform_vertex(s_gpu.idx[i], &s_xf[i]))
++    if (cache && ++s_xfc_batch == 0) {        /* serial wrapped: forget all tags */
++        memset(s_xfc, 0, sizeof s_xfc);
++        s_xfc_batch = 1;
++    }
++    s_xfc_idx += n;
++    for (i = 0; i < n; i++) {
++        uint32_t ix = s_gpu.idx[i];
++        if (cache) {
++            uint32_t h = ix & (XF_CACHE_SIZE - 1u);
++            if (s_xfc[h].batch == s_xfc_batch && s_xfc[h].index == ix) {
++                const Nv2aVshOutput *first = &s_xf[s_xfc[h].slot];
++                s_xfc_hits++;
++                if (s_xfc_mode != 2) {
++                    s_xf[i] = *first;
++                    continue;
++                }
++                if (!transform_vertex(ix, &s_xf[i]))
++                    return;
++                s_xfc_checked++;
++                if (memcmp(first, &s_xf[i], sizeof *first) != 0 && s_xfc_diff++ < 16)
++                    fprintf(stderr, "[XF-CACHE] repeat of index %u differs: pos %g %g %g %g vs %g %g %g %g\n",
++                            ix, first->pos[0], first->pos[1], first->pos[2], first->pos[3],
++                            s_xf[i].pos[0], s_xf[i].pos[1], s_xf[i].pos[2], s_xf[i].pos[3]);
++                continue;
++            }
++            if (!transform_vertex(ix, &s_xf[i]))
++                return;                                /* no program loaded */
++            s_xfc[h].batch = s_xfc_batch;
++            s_xfc[h].index = ix;
++            s_xfc[h].slot = i;
++            continue;
++        }
++        if (!transform_vertex(ix, &s_xf[i]))
+             return;                                    /* no program loaded */
++    }
+     xf_set_viewport();
+     {
+         const VertexAttr *tc = texcoord_attr();
+@@ -4342,6 +4468,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
      case 0x17F8: s_gpu.clip_plane_mode = param; break;
  
      /* Alpha test and fog. */
@@ -240,3 +332,132 @@ index a5ea9cc..7c2322a 100644
      case 0x0300: s_gpu.alpha_test = param; break;
      case 0x033C: s_gpu.alpha_func = param; break;
      case 0x0340: s_gpu.alpha_ref = param; break;
+@@ -4886,6 +5014,16 @@ void nv2a_pb_exec_report(void)
+         last_ms = now;
+     }
+     flip_hold_report();
++    if (s_xfc_mode > 0 && s_xfc_idx) {
++        fprintf(stderr, "[XF-CACHE] %llu indices, %llu repeats taken from the cache (%.1f%%)",
++                (unsigned long long)s_xfc_idx, (unsigned long long)s_xfc_hits,
++                100.0 * (double)s_xfc_hits / (double)s_xfc_idx);
++        if (s_xfc_mode == 2)
++            fprintf(stderr, ", %llu checked, %llu differ", (unsigned long long)s_xfc_checked,
++                    (unsigned long long)s_xfc_diff);
++        fprintf(stderr, "\n");
++        s_xfc_idx = s_xfc_hits = 0;
++    }
+     fprintf(stderr, "[GPU] surface 0x%08X pitch %u clip %ux%u+%u+%u"
+                     " clears %u | %u unhandled methods (%d distinct)\n",
+             s_gpu.color_offset, s_gpu.pitch, s_gpu.clip_w, s_gpu.clip_h,
+diff --git a/src/kernel/nv2a_vsh_interp.c b/src/kernel/nv2a_vsh_interp.c
+index c7fd25d..787c904 100644
+--- a/src/kernel/nv2a_vsh_interp.c
++++ b/src/kernel/nv2a_vsh_interp.c
+@@ -84,6 +84,7 @@ void nv2a_vsh_set_start_slot(uint32_t slot)
+     }
+ }
+ void nv2a_vsh_set_cxt_write(uint32_t enable) { s_cxt_write = enable; }
++uint32_t nv2a_vsh_cxt_write(void) { return s_cxt_write; }
+ 
+ void nv2a_vsh_set_constant_load(uint32_t index)
+ {
+diff --git a/src/kernel/nv2a_vsh_interp.h b/src/kernel/nv2a_vsh_interp.h
+index 8acb0af..35004bb 100644
+--- a/src/kernel/nv2a_vsh_interp.h
++++ b/src/kernel/nv2a_vsh_interp.h
+@@ -43,6 +43,7 @@ void nv2a_vsh_set_start_slot(uint32_t slot);          /* _PROGRAM_START     */
+ void nv2a_vsh_set_constant_load(uint32_t index);      /* _CONSTANT_LOAD     */
+ void nv2a_vsh_constant_word(uint32_t word);           /* _CONSTANT(i)       */
+ void nv2a_vsh_set_cxt_write(uint32_t enable);         /* _CXT_WRITE_EN      */
++uint32_t nv2a_vsh_cxt_write(void);   /* may the program write c[]? */
+ 
+ /* Run the program from the start slot on one vertex. Inputs are the ten
+  * attribute values as floats. Returns 0 if there is no program to run (no
+diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
+index 7ade793..8389cb6 100644
+--- a/src/kernel/xbox_memory_layout.c
++++ b/src/kernel/xbox_memory_layout.c
+@@ -1403,6 +1403,32 @@ static void framebuffer_probe_tick(void)
+  * and a level load, thousands of kickoffs long, looked frozen. Clearing them
+  * from inside the walk answers the kickoff within a few hundred commands,
+  * without a thread of its own spinning on a host core. */
++/* Sleeping instead of spinning (an addition for one title's port). With
++ * xbox_Nv2aSetIdleWait(ms) the thread below waits on g_nv2a_wake for at most
++ * that many milliseconds when a pass found nothing new to execute, instead of
++ * Sleep(0); xbox_Nv2aKick() wakes it, and the port calls it after D3D's
++ * kick-off writes DMA_PUT. g_nv2a_acked is set each time the PFB flush bit is
++ * cleared, so a kick-off can wait for that instead of spinning. Off (0, the
++ * old Sleep(0) loop) unless the port turns it on. */
++static HANDLE g_nv2a_wake, g_nv2a_acked;
++static volatile LONG g_nv2a_idle_ms;
++
++void xbox_Nv2aSetIdleWait(int ms)
++{
++    InterlockedExchange(&g_nv2a_idle_ms, ms > 0 ? ms : 0);
++}
++
++void xbox_Nv2aKick(void)
++{
++    if (g_nv2a_wake)
++        SetEvent(g_nv2a_wake);
++}
++
++void *xbox_Nv2aAckedEvent(void)
++{
++    return g_nv2a_acked;
++}
++
+ static void nv2a_ack_busy_bits(int flip_held)
+ {
+     volatile uint32_t *regs = (volatile uint32_t *)g_nv2a_memory;
+@@ -1429,8 +1455,11 @@ static void nv2a_ack_busy_bits(int flip_held)
+         }
+         /* Interlocked: the vblank-ack thread and the guest change other
+          * bits of the same word meanwhile. */
+-        if (*r & mask)
++        if (*r & mask) {
+             InterlockedAnd((volatile LONG *)r, (LONG)~mask);
++            if (g_nv2a_acked && NV2A_ACK[i].offset == NV2A_ACK_PFB_FLUSH)
++                SetEvent(g_nv2a_acked);
++        }
+     }
+ }
+ 
+@@ -1466,6 +1495,7 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+          * flips paces only the last. */
+         extern int nv2a_pb_exec_flip_poll(void);
+         int flip_held = nv2a_pb_exec_flip_poll();
++        int worked = 0;                 /* a new segment was executed */
+         nv2a_ack_busy_bits(flip_held);
+         for (size_t i = 0; i < sizeof(NV2A_IDLE) / sizeof(NV2A_IDLE[0]); i++) {
+             volatile uint32_t *r =
+@@ -1604,6 +1634,7 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+                     get_written = put;
+                 }
+                 last_put = put; last_put_ms = now_ms;
++                worked = 1;
+                 /* GET as well as PUT. A title that stops submitting has either
+                  * finished or is spinning on the GPU catching up, and only GET
+                  * tells those apart -- D3D waits for GET to reach PUT before it
+@@ -1650,7 +1681,11 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+         *(volatile uint32_t *)((uintptr_t)(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT)
+                                + g_memory_offset) = GetTickCount();
+ 
+-        Sleep(0);  /* yield; the waiter is spinning on another core */
++        /* Nothing new this pass: sleep until a kick-off or the time limit. */
++        if (g_nv2a_idle_ms && g_nv2a_wake && !flip_held && !worked)
++            WaitForSingleObject(g_nv2a_wake, (DWORD)g_nv2a_idle_ms);
++        else
++            Sleep(0);  /* yield; the waiter is spinning on another core */
+     }
+     return 0;
+ }
+@@ -1660,6 +1695,8 @@ static void xbox_Nv2aAckStart(void)
+     dsp_ack_init();
+     poke_init();
+     g_nv2a_ack_stop = 0;
++    g_nv2a_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
++    g_nv2a_acked = CreateEventW(NULL, FALSE, FALSE, NULL);
+     g_nv2a_ack_thread = CreateThread(NULL, 0, nv2a_ack_thread,
+                                      g_nv2a_memory, 0, NULL);
+     if (g_nv2a_ack_thread) {

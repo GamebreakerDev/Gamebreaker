@@ -19,10 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This licence covers the code and documents in this repository only. It grants
-no rights in the game this project is for, its program, data, names or marks,
-which belong to their owners. Some files derive from the xboxrecomp toolkit and
-carry its MIT notice as well; see THIRD-PARTY-NOTICES.md.

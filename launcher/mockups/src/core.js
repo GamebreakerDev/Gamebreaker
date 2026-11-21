@@ -26,11 +26,11 @@ const S = {
     aniso: '16', msaa: '4', gpuPref: 'default',
     skipIntro: true, pauseBg: true, songRotate: true, demoDelay: '90', rumbleOn: true,
     smoothAudio: true, bgAudio: true, volume: 100,
-    volMusic: 100, volSfx: 100, volCrowd: 100, volPlayers: 100, volCommentary: 100, commentary: true, mono: false, showFps: false,
+    volMusic: 100, volSfx: 100, volCrowd: 100, volPlayers: 100, volCommentary: 100, commentary: true, mono: false, showFps: false, texDump: false,
     cheats: false, cheat_street_kids: false, cheat_no_counters: false, cheat_gb_trails: false, cheat_all_quicks: false, cheat_unlimited_turbo: false, cheat_easy_2_pointers: false, cheat_hard_2_pointers: false, cheat_big_heads: false, cheat_wnba_ball: false, cheat_alternate_ball: false, cheat_no_hud: false, cheat_explosive_rims: false,
     pads: false, preset: 'original', trigger: 12, deadzone: 0, rumble1: 100, rumble2: 100, rumble3: 100, rumble4: 100, padOrder: 'auto', kbPlayer: 1, padBg: false,
-    renderer: 'd3d11', updates: true, sound: true,
-    scenario: 0, speed: 'fast', padSim: false
+    renderer: 'd3d11', updates: true, sound: true, mods: true,
+    scenario: 0, speed: 'fast', padSim: false, mockMods: 'sample', mockZip: 0
   }
 };
 const scenario = () => SCEN[S.set.scenario] || 'ok';
@@ -47,9 +47,9 @@ const scenario = () => SCEN[S.set.scenario] || 'ok';
    2026-11-16 (format 1) has no such list: there, a value that differs from
    that time's default counts as chosen, and one equal to it as not chosen. */
 const PERSIST = ['theme', 'size', 'windowMode', 'monitor', 'res', 'aspect', 'aspect2d', 'gameHz', 'vsync', 'aniso', 'msaa', 'skipIntro', 'smoothAudio', 'bgAudio', 'volume',
-  'pads', 'preset', 'trigger', 'deadzone', 'rumble1', 'rumble2', 'rumble3', 'rumble4', 'padOrder', 'kbPlayer', 'padBg', 'gpuPref', 'updates', 'sound',
+  'pads', 'preset', 'trigger', 'deadzone', 'rumble1', 'rumble2', 'rumble3', 'rumble4', 'padOrder', 'kbPlayer', 'padBg', 'gpuPref', 'updates', 'sound', 'mods',
   'pauseBg', 'songRotate', 'demoDelay', 'rumbleOn',
-  'volMusic', 'volSfx', 'volCrowd', 'volPlayers', 'volCommentary', 'commentary', 'mono', 'showFps',
+  'volMusic', 'volSfx', 'volCrowd', 'volPlayers', 'volCommentary', 'commentary', 'mono', 'showFps', 'texDump',
   'cheats', 'cheat_street_kids', 'cheat_no_counters', 'cheat_gb_trails', 'cheat_all_quicks', 'cheat_unlimited_turbo', 'cheat_easy_2_pointers', 'cheat_hard_2_pointers', 'cheat_big_heads', 'cheat_wnba_ball', 'cheat_alternate_ball', 'cheat_no_hud', 'cheat_explosive_rims'];
 /* The renderer is always Direct3D 11 (the slow reference renderer was removed
    from the launcher, 2026-11-16); a remembered "cpu" is no longer read. */
@@ -72,9 +72,19 @@ function nearestShape(w, h) {
   for (const s of SHAPES) if (Math.abs(Math.log(r / s[1])) < Math.abs(Math.log(r / best[1]))) best = s;
   return best[0];
 }
-/* Resolution: Fit (the display's own) on every PC; players can turn it down. */
+/* Resolution: Fit (the display's own) on PCs with a graphics card; players can
+   turn it down. A PC whose only graphics are built into the processor starts
+   lighter: 1x, 2x anti-aliasing, 4x texture filtering. Fit with 4x
+   anti-aliasing at 1080p is about 4 million pixels a frame with four samples
+   each; on a Radeon 780M-class chip that alone is more than the 16.7 ms of a
+   frame, and the chip shares the memory the CPU's graphics thread works in.
+   Only defaults change: a value the player chose is kept. */
+const lowGpu = () => !!(LIVE && LIVE.gpu && LIVE.gpu.integratedOnly);
 const DEFAULTS = {
-  aspect: () => { const t = targetDisplay(); return t ? nearestShape(t.w, t.h) : BASE.aspect; }
+  aspect: () => { const t = targetDisplay(); return t ? nearestShape(t.w, t.h) : BASE.aspect; },
+  res: () => (lowGpu() ? '1' : BASE.res),
+  msaa: () => (lowGpu() ? '2' : BASE.msaa),
+  aniso: () => (lowGpu() ? '4' : BASE.aniso)
 };
 S.chosen = new Set();
 const defaultOf = k => (DEFAULTS[k] ? DEFAULTS[k]() : BASE[k]);
@@ -170,7 +180,21 @@ function consume(name) {
 
 /* The halo ring is the launcher's status light: idle, work (fills to p%),
    spin (busy, no known length), error, ok. */
-function halo(state, p) { app.dataset.halo = state; if (p !== undefined) app.style.setProperty('--hp', Math.max(0, Math.min(100, p)).toFixed(2)); }
+/* When a job ends, the ring runs back to empty and its colour eases back to
+   the resting gradient ("settle") instead of switching at once. */
+const HALO_SETTLE_MS = 1000;
+let haloT = 0;
+function halo(state, p) {
+  clearTimeout(haloT);
+  const cur = app.dataset.halo;
+  if (state === 'idle' && (cur === 'ok' || cur === 'work' || cur === 'settle')) {
+    if (cur !== 'settle') { app.dataset.halo = 'settle'; app.style.setProperty('--hp', '0'); }
+    haloT = setTimeout(() => { if (app.dataset.halo === 'settle') app.dataset.halo = 'idle'; }, HALO_SETTLE_MS);
+    return;
+  }
+  app.dataset.halo = state;
+  if (p !== undefined) app.style.setProperty('--hp', Math.max(0, Math.min(100, p)).toFixed(2));
+}
 
 /* ------------------------------------------------------------ preferences */
 const mqDark = matchMedia('(prefers-color-scheme: dark)');
@@ -376,6 +400,7 @@ function makeMotes(n) {
 }
 
 function dpad(dx, dy) {
+  if (MD.lifted && S.page === 'mods') { modsDpad(dy); return; }
   const el = document.activeElement;
   if (el && dx && el.matches('.slider')) return stepSlider(el, dx);
   if (el && dx && el.matches('.cycler')) return cycle(el, dx);
@@ -393,6 +418,7 @@ function activate() {
 let capture = null;
 addEventListener('keydown', e => {
   if (capture) { e.preventDefault(); if (!e.repeat) finishRebind(e); return; }
+  if (modsKey(e)) return;
   const k = e.key;
   if (k === '`') { e.preventDefault(); if (!LIVE || LIVE.dev) toggleMock(); return; }
   const arrows = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
@@ -414,6 +440,7 @@ function back() {
   tick('back');
   if (capture) return cancelRebind();
   if (padTest) return setPadTest(false);
+  if (!S.mockOpen && modsBack()) return;
   if (S.mockOpen) return toggleMock(false);
   if (S.launchOpen) return closeLaunch();
   if (S.sheetOpen) { if (!S.busy) closeSheet(); return; }
@@ -484,6 +511,7 @@ function hostEvent(ev) {
   else if (ev === 'left') dpad(-1, 0); else if (ev === 'right') dpad(1, 0);
   else if (ev === 'a') activate(); else if (ev === 'b') back();
   else if (ev === 'lb') bumper(-1); else if (ev === 'rb') bumper(1);
+  else if (ev === 'x' || ev === 'y') modsPad(ev);
   else if (ev === 'start' && S.mode === 'main' && S.page === 'home' && !S.sheetOpen && !S.launchOpen) openLaunch();
 }
 if (hostBridge) {
@@ -517,11 +545,13 @@ function pollPads(t) {
     } else held[name] = 0;
   }
   const edge = i => { const now = b(i), was = prevBtn[i]; prevBtn[i] = now; if (now) any = true; return now && !was; };
-  const A = edge(0), B = edge(1), LB = edge(4), RB = edge(5), START = edge(9);
-  for (let i = 0; i < p.buttons.length; i++) if (![0, 1, 4, 5, 9].includes(i)) { if (b(i)) any = true; prevBtn[i] = b(i); }
+  const A = edge(0), B = edge(1), X = edge(2), Y = edge(3), LB = edge(4), RB = edge(5), START = edge(9);
+  for (let i = 0; i < p.buttons.length; i++) if (![0, 1, 2, 3, 4, 5, 9].includes(i)) { if (b(i)) any = true; prevBtn[i] = b(i); }
   if (any) setInput('gamepad');
   if (A) activate();
   if (B) back();
+  if (X) modsPad('x');
+  if (Y) modsPad('y');
   if (LB) bumper(-1);
   if (RB) bumper(1);
   if (START && S.mode === 'main' && S.page === 'home' && !S.sheetOpen && !S.launchOpen) openLaunch();
@@ -554,8 +584,8 @@ function updatePadUI() {
 
 /* ------------------------------------------------------------------ hints */
 const GL = {
-  keyboard: { move: ['\u2191\u2193\u2190\u2192'], a: ['Enter'], b: ['Esc'], tabs: ['Q', 'E'], play: ['Enter'] },
-  gamepad: { move: ['\u271A'], a: ['A'], b: ['B'], tabs: ['LB', 'RB'], play: ['\u2630'] }
+  keyboard: { move: ['\u2191\u2193\u2190\u2192'], a: ['Enter'], b: ['Esc'], tabs: ['Q', 'E'], play: ['Enter'], order: ['Alt', '\u2191\u2193'], x: ['\u2191\u2193'], y: ['Del'] },
+  gamepad: { move: ['\u271A'], a: ['A'], b: ['B'], tabs: ['LB', 'RB'], play: ['\u2630'], order: ['X'], x: ['\u271A'], y: ['Y'] }
 };
 function glyphs(keys, kind) {
   return keys.map(k => `<span class="glyph${kind === 'gamepad' ? ' glyph-pad' + (k.length > 1 ? ' glyph-wide' : '') : ''}">${k}</span>`).join('');
@@ -567,6 +597,10 @@ function renderHints() {
   if (!(S.mode === 'main' && S.page === 'home' && !S.sheetOpen)) items.push([g.b, S.sheetOpen ? 'Close' : 'Back']);
   if (S.mode === 'main' && !S.sheetOpen) items.push([g.tabs, S.page === 'settings' ? 'Switch section' : 'Switch page']);
   if (S.mode === 'main' && S.page === 'home' && kind === 'gamepad' && !S.sheetOpen) items.push([g.play, 'Play']);
+  if (S.mode === 'main' && S.page === 'mods' && !S.sheetOpen) {
+    items.splice(1, 1, [g.a, 'On or off'], [g.order, 'Order'], [g.y, 'Remove']);
+    if (MD.lifted) items.splice(0, items.length, [g.x, 'Move'], [g.a, 'Place'], [g.b, 'Cancel']);
+  }
   if (S.launchOpen) items.splice(0, items.length, [g.b, 'Back']);
   if (padTest) items.splice(0, items.length, kind === 'gamepad' ? [g.b, 'Hold to finish'] : [g.b, 'Finish']);
   const html = items.map(([k, label]) => `<span class="hint">${glyphs(k, kind)}<span>${label}</span></span>`).join('');
@@ -583,6 +617,7 @@ function summaries() {
   bind('presetDesc', S.set.preset === 'original' ? 'Third turbo on left stick click' : 'Third turbo on LB');
   bind('resLabel', { 1: '640 \u00d7 480', 2: '1280 \u00d7 960', 3: '1920 \u00d7 1440', 4: '2560 \u00d7 1920', fit: 'Native' }[S.set.res]);
   bind('aspectDesc', S.chosen.has('aspect') ? '' : 'Matches the display');
+  bind('resDesc', lowGpu() && !S.chosen.has('res') ? 'Set for integrated graphics' : 'Multiples of 640 × 480');
   // Menus and HUD only differ from 4:3 when the shape is wider.
   const flat = S.set.aspect === '4:3';
   const r2d = $('[data-row="aspect2d"]');
@@ -641,6 +676,8 @@ function setSetting(key, value) {
     applyPrefs();
   }
   if (key === 'res') drawPreview(true);
+  if (key === 'mods') modsMaster();
+  if (key === 'mockMods') modsInit([]);
   if (key === 'padSim') { updatePadUI(); if (value) setInput('gamepad'); renderHints(); }
   // Two pairs of cheats share one game setting each: choosing one clears the other.
   if (value === true && CHEAT_PAIRS[key]) {
@@ -711,19 +748,26 @@ $$('.slider').forEach(sl => {
 });
 
 /* Keyboard keys. Each game button's key, for the player the keyboard drives;
-   the host keeps them in the player's controls.ini (key_a = Z ...). Only keys
-   that differ from the defaults are written. The names are the game's own. */
+   the host keeps them in the player's controls.ini (key_a = K ...). Only keys
+   that differ from the defaults are written. The names are the game's own.
+   The defaults must match gb_pad_keys_defaults (port\src\gb_pad_logic.c).
+   The turbos are three rows that say how many: the game counts turbos held,
+   never which, so the "2 turbos" key presses both triggers and the "3 turbos"
+   key both triggers and the left stick click (TURBO_CTLS below). */
 const KEY_COLS = [
-  [['a', 'A', 'Z'], ['b', 'B', 'X'], ['x', 'X', 'C'], ['y', 'Y', 'V'], ['black', 'Black', 'E'], ['white', 'White', 'Q'],
-   ['left_trigger', 'Left trigger', '1'], ['right_trigger', 'Right trigger', '3'], ['start', 'Start', 'enter'], ['back', 'Back', 'backspace'],
-   ['left_thumb', 'Left stick click', 'shift'], ['right_thumb', 'Right stick click', 'ctrl']],
+  [['a', 'A', 'K'], ['b', 'B', 'L'], ['x', 'X', 'J'], ['y', 'Y', 'I'], ['black', 'Black', 'E'], ['white', 'White', 'Q'],
+   ['turbo1', '1 turbo', 'lshift'], ['turbo2', '2 turbos', 'space'], ['turbo3', '3 turbos', 'semicolon'],
+   ['start', 'Start', 'enter'], ['back', 'Back', 'backspace, escape'], ['right_thumb', 'Right stick click', 'U']],
   [['dpad_up', 'D-pad up', 'up'], ['dpad_down', 'D-pad down', 'down'], ['dpad_left', 'D-pad left', 'left'], ['dpad_right', 'D-pad right', 'right'],
    ['left_stick_up', 'Left stick up', 'W, numpad8'], ['left_stick_down', 'Left stick down', 'S, numpad2'], ['left_stick_left', 'Left stick left', 'A, numpad4'], ['left_stick_right', 'Left stick right', 'D, numpad6'],
-   ['right_stick_up', 'Right stick up', 'I'], ['right_stick_down', 'Right stick down', 'K'], ['right_stick_left', 'Right stick left', 'J'], ['right_stick_right', 'Right stick right', 'L']]
+   ['right_stick_up', 'Right stick up', 'T'], ['right_stick_down', 'Right stick down', 'G'], ['right_stick_left', 'Right stick left', 'F'], ['right_stick_right', 'Right stick right', 'H']]
 ];
+/* Which turbo keys each control of the file lists: index 0 is the 1-turbo key. */
+const TURBO_CTLS = { left_trigger: [0, 1, 2], right_trigger: [1, 2], left_thumb: [2] };
+const TURBO_DEF = ['lshift', 'space', 'semicolon'];
 const KEY_ROWS = KEY_COLS.flat();
 const K = { players: { 1: {}, 2: {}, 3: {}, 4: {} }, built: false };
-const KEY_WORDS = { enter: 'Enter', backspace: 'Backspace', tab: 'Tab', shift: 'Shift', ctrl: 'Ctrl', space: 'Space', capslock: 'Caps Lock', pause: 'Pause',
+const KEY_WORDS = { escape: 'Esc', enter: 'Enter', backspace: 'Backspace', tab: 'Tab', shift: 'Shift', ctrl: 'Ctrl', space: 'Space', capslock: 'Caps Lock', pause: 'Pause',
   pageup: 'Page Up', pagedown: 'Page Down', end: 'End', home: 'Home', left: 'Left arrow', up: 'Up arrow', right: 'Right arrow', down: 'Down arrow', insert: 'Insert', delete: 'Delete',
   numpadmultiply: 'Keypad *', numpadadd: 'Keypad +', numpadsubtract: 'Keypad -', numpaddecimal: 'Keypad .', numpaddivide: 'Keypad /',
   semicolon: ';', equals: '=', comma: ',', minus: '-', period: '.', slash: '/', grave: '`', leftbracket: '[', backslash: '\\', rightbracket: ']', quote: "'",
@@ -735,7 +779,29 @@ function keyLabel(n) { const m = /^numpad(\d)$/.exec(n); return m ? `Keypad ${m[
 /* Shift held on either side also counts as the Shift of that side. */
 const keysOverlap = (a, b) => a === b || ['shift', 'ctrl', 'alt'].some(w => (a === w && (b === 'l' + w || b === 'r' + w)) || (b === w && (a === 'l' + w || a === 'r' + w)));
 const keysPlayer = () => (S.set.pads ? S.set.kbPlayer : 1);
-const keysOf = (ctl, def, p = keysPlayer()) => keyList((K.players[p] || {})[ctl] !== undefined ? K.players[p][ctl] : def);
+const fileKeys = (ctl, def, p) => keyList((K.players[p] || {})[ctl] !== undefined ? K.players[p][ctl] : def);
+/* The three turbo keys, read back from the file's three controls. */
+function turboKeys(p = keysPlayer()) {
+  const lt = fileKeys('left_trigger', TURBO_DEF.join(', '), p), rt = fileKeys('right_trigger', TURBO_DEF.slice(1).join(', '), p);
+  const th = fileKeys('left_thumb', TURBO_DEF[2], p);
+  const t3 = th.find(k => rt.includes(k) && lt.includes(k)) || th[0] || '';
+  const t2 = rt.find(k => k !== t3 && lt.includes(k)) || rt.find(k => k !== t3) || '';
+  const t1 = lt.find(k => k !== t2 && k !== t3) || '';
+  return [t1, t2, t3];
+}
+function setTurbo(p, i, name) {
+  const t = turboKeys(p); t[i] = name;
+  const same = t.every((k, j) => keyCanon(k) === keyCanon(TURBO_DEF[j]));
+  for (const [ctl, idx] of Object.entries(TURBO_CTLS)) {
+    if (same) delete K.players[p][ctl];
+    else K.players[p][ctl] = idx.map(j => t[j]).filter(Boolean).join(', ') || 'none';
+  }
+}
+const keysOf = (ctl, def, p = keysPlayer()) => {
+  const m = /^turbo([123])$/.exec(ctl);
+  if (m) { const k = turboKeys(p)[m[1] - 1]; return k ? [k] : []; }
+  return fileKeys(ctl, def, p);
+};
 function renderKeys() {
   const grid = $('[data-keys-grid]');
   if (!K.built) {
@@ -776,8 +842,9 @@ function finishRebind(e) {
   const ctl = capture.dataset.rebind, row = KEY_ROWS.find(r => r[0] === ctl);
   const other = KEY_ROWS.find(([c, , def]) => c !== ctl && keysOf(c, def).some(k => keysOverlap(k, name)));
   if (other) return refuse(`${keyLabel(name)} is already ${other[1]}.`);
-  const p = keysPlayer();
-  if (keyCanon(row[2]) === name && !row[2].includes(',')) delete K.players[p][ctl]; else K.players[p][ctl] = name;
+  const p = keysPlayer(), turbo = /^turbo([123])$/.exec(ctl);
+  if (turbo) setTurbo(p, turbo[1] - 1, name);
+  else if (keyCanon(row[2]) === name && !row[2].includes(',')) delete K.players[p][ctl]; else K.players[p][ctl] = name;
   const b = capture; cancelRebind();
   play($('.keycap', b), spec('cycle').in, 1); tick('select');
   saveKeys();
@@ -885,7 +952,7 @@ function followLayout() {
 }
 
 /* ------------------------------------------------------------- navigation */
-const PAGES = ['home', 'settings', 'updates', 'about'];
+const PAGES = ['home', 'settings', 'mods', 'updates', 'about'];
 const TABS = ['display', 'audio', 'controls', 'keyboard', 'game', 'cheats', 'advanced'];
 async function go(page, opts = {}) {
   if (opts.tab) setTab(opts.tab, page !== S.page);
@@ -895,16 +962,19 @@ async function go(page, opts = {}) {
   setPadTest(false);
   S.page = page; app.dataset.view = page;
   if (hostBridge) hostBridge.postMessage('view ' + page);
+  if (page === 'mods' && LIVE && !MD.installing && !MD.incoming) send('live:modsget');
+  if (page !== 'mods' && MD.lifted) drop(true);
   $('.subnav').inert = page !== 'settings';
   pulse(dir); followLayout();
+  const navPage = opts.nav || page;
   $$('.nav-item').forEach(n => n.toggleAttribute('aria-current', false));
-  $(`.nav-item[data-goto="${page}"]`).setAttribute('aria-current', 'page');
+  $(`.nav-item[data-goto="${navPage}"]`).setAttribute('aria-current', 'page');
   moveIndicator($('.nav'), $('.nav [aria-current="page"]'));
   renderHints();
   const act = document.activeElement;
   const fromNav = !!act && act.matches('.nav-item, .tab');
   // focus in the menu always sits on the section being shown
-  if (fromNav && (act.matches('.tab') ? page !== 'settings' : act.dataset.goto !== page)) $(`.nav-item[data-goto="${page}"]`).focus({ preventScroll: true });
+  if (fromNav && (act.matches('.tab') ? page !== 'settings' : act.dataset.goto !== navPage)) $(`.nav-item[data-goto="${navPage}"]`).focus({ preventScroll: true });
   holdRing(!fromNav);
   const p = swap(oldEl, newEl, 'page', dir, $$('.page'));
   cascade(newEl);
@@ -1267,7 +1337,6 @@ let sheetReturn = null;
 async function openSheet() {
   if (LIVE) { if (U.latest && !U.active) { fillUpdateSheet(); return showSheet('info'); } if (!U.latest) toast('Up to date', 'ok'); return; }
   if (S.updated) { toast('Up to date', 'ok'); return; }
-  if (S.page !== 'home') await go('home');
   return showSheet('info');
 }
 /* The same sheet holds the update, the backup list and its confirmation, and
@@ -1278,9 +1347,10 @@ async function showSheet(name) {
   if (S.sheetOpen) { sheetState(name); return; }
   sheetReturn = document.activeElement;
   // The sheet opens inside the halo ring, which only sits mid-window on Play;
-  // from another page go there, and come back when it closes.
+  // from another page go there, and come back when it closes. The menu keeps
+  // marking the page the sheet was opened from.
   sheetFrom = null;
-  if (S.page !== 'home') { sheetFrom = { page: S.page, tab: S.page === 'settings' ? S.tab : null }; await go('home'); }
+  if (S.page !== 'home') { sheetFrom = { page: S.page, tab: S.page === 'settings' ? S.tab : null }; await go('home', { nav: S.page }); }
   S.sheetOpen = true; app.dataset.sheet = '1'; renderHints();
   $$('.sheet-state').forEach(s => { s.hidden = s.dataset.sheet !== name; });
   scrim.hidden = false; sheet.hidden = false;
@@ -1689,6 +1759,7 @@ function onExit(o) {
   if (o.kind === 'setup' && L.running && o.code !== 0 && !L.errorShown) onError({ step: 'setup', code: '', text: `Setup ended with exit code ${o.code}.` });
   if (o.kind === 'check' && o.code !== 0 && !L.errorShown) onError({ step: 'checks', code: '', text: `The checks ended with exit code ${o.code}.` });
   if (o.kind === 'verify' && o.code !== 0 && !L.errorShown) onError({ step: 'disc', code: '', text: `Reading the disc ended with exit code ${o.code}.` });
+  if (o.kind === 'modinstall' && MD.installing) installFailed('Install failed.');   // the install ended without its own answer
 }
 function onEngine(o) {
   if (U.active && ['step', 'tool', 'lift', 'log', 'error', 'done', 'xbe', 'check'].includes(o.ev)) { onUpdateEngine(o); return; }
@@ -1730,6 +1801,7 @@ function onEngine(o) {
       if (!o.to) break;
       L.moveTo = o.to; bind('moveTo', o.to); showSheet('move'); break;
     case 'move': onMove(o); break;
+    case 'mods': case 'modinspect': case 'modprogress': case 'modfail': case 'modremoved': case 'modorder': case 'modnote': onModsEvent(o); break;
   }
 }
 
@@ -1914,11 +1986,13 @@ function initLive() {
 }
 /* Saves: open the folder, restore a dated backup (saves\backups\yyyy-mm-dd_hhmmss). */
 function backupLabel(name) {
-  const m = /^(\d{4})-(\d\d)-(\d\d)_(\d\d)(\d\d)(\d\d)(_before-unlock)?$/.exec(name);
+  const m = /^(\d{4})-(\d\d)-(\d\d)_(\d\d)(\d\d)(\d\d)(_before-unlock|_mods-changed)?$/.exec(name);
   if (!m) return name;
   const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
   const when = d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-  return m[7] ? `${when}, before unlock` : when;
+  if (m[7] === '_before-unlock') return `${when}, before unlock`;
+  if (m[7] === '_mods-changed') return `${when}, before mods changed`;
+  return when;
 }
 function onBackups(o) {
   const list = (o.list || []);
@@ -1933,6 +2007,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-copylog]')) { send('live:copylog'); return; }
   if (e.target.closest('[data-open-saves]')) { send('live:opensaves'); return; }
   if (e.target.closest('[data-open-shots]')) { send('live:openshots'); return; }
+  if (e.target.closest('[data-open-dump]')) { send('live:opendump'); return; }
   if (e.target.closest('[data-restore]')) { send('live:backups'); return; }
   const bk = e.target.closest('[data-backup]');
   if (bk) { L.restoreName = bk.dataset.backup; bind('restoreTitle', 'Restore the save from ' + backupLabel(L.restoreName)); sheetState('confirm'); return; }
@@ -1949,6 +2024,8 @@ document.addEventListener('click', e => {
   }
   if (e.target.closest('[data-unlock-go]')) { L.unlockOnce = true; closeSheet().then(() => openLaunch()); return; }
 });
+
+/*@MODS@*/
 
 /* ------------------------------------------------------------------- init */
 function setAway() { if (document.hasFocus()) delete root.dataset.away; else root.dataset.away = '1'; }
@@ -1974,6 +2051,7 @@ function init() {
   if (tokens.includes('padtest')) setTimeout(() => setPadTest(true), 1200);
   if (startTab) { $$('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === startTab))); $$('.tab-panel').forEach(pn => { pn.hidden = pn.dataset.panel !== startTab; }); S.tab = startTab; }
   if (LIVE) initLive();
+  modsInit(tokens);
   const sc = tokens.find(t => t.startsWith('sc:'));
   if (sc && SCEN.includes(sc.slice(3))) S.set.scenario = SCEN.indexOf(sc.slice(3));
   const stepTok = tokens.find(t => t.startsWith('step:'));

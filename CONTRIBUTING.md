@@ -11,6 +11,8 @@ Not in commits, pull requests or issues:
   analysis output, or anything else derived from the game's program;
 - save files, memory dumps, frame or audio captures, video;
 - links to disc images or other copies of the game.
+- mods that contain the game's own files (making mods is described in
+  [docs/MODDING.md](docs/MODDING.md)).
 
 The project builds everything from each player's own disc, and stays
 publishable only as long as it holds nothing of the game.

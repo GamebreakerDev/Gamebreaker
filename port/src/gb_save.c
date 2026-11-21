@@ -233,7 +233,7 @@ void gb_log_header(void)
         "GB_COMMENTARY", "GB_AUDIO_MONO", "GB_AUDIO_TICK", "GB_AUDIO_LEAD_MS",
         "GB_AUDIO_WAIT", "GB_AUDIO_GUARD", "GB_PADS", "GB_PAD_PRESET", "GB_PAD_TRIGGER",
         "GB_PAD_RUMBLE", "GB_PAD_ORDER", "GB_PAD_KEYBOARD_PLAYER", "GB_PAD_BACKGROUND",
-        "GB_PAD_DEADZONE", "GB_CHEATS", "GB_UNLOCK_ALL",
+        "GB_PAD_DEADZONE", "GB_CHEATS", "GB_UNLOCK_ALL", "GB_MODS", "GB_MODS_DIR",
     };
     char line[1024], cpu[128] = "unknown processor";
     int at = 0;
@@ -355,6 +355,18 @@ static void gb_save_backup_named(const char *why)
              t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, why);
     n = copy_files(save, to);
     (void)n;
+}
+
+/* For gb_mods.c: the same copy, saying whether there was a save to copy. */
+int gb_save_backup_tagged(const char *why)
+{
+    char file[MAX_PATH];
+
+    snprintf(file, sizeof file, "%s\\" GB_TITLE_DIR "\\" GB_SAVE_SUBDIR "\\" GB_SAVE_FILE, s_root);
+    if (!is_file(file))
+        return 0;
+    gb_save_backup_named(why);
+    return 1;
 }
 
 void gb_save_init(void)

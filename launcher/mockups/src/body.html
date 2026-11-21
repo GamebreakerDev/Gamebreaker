@@ -48,6 +48,7 @@
             <span class="indicator" aria-hidden="true"></span>
           </div>
       </div>
+      <button class="nav-item" data-goto="mods">Mods<span class="nav-count" data-bind="modsNav"></span></button>
       <button class="nav-item" data-goto="updates">Updates<span class="nav-dot" aria-label="update available"></span></button>
       <button class="nav-item" data-goto="about">About</button>
       <span class="indicator" aria-hidden="true"></span>
@@ -95,7 +96,7 @@
                   </div>
                 </div>
                 <div class="row">
-                  <div class="row-text"><div class="row-label">Resolution</div><div class="row-desc">Multiples of 640 &times; 480</div></div>
+                  <div class="row-text"><div class="row-label">Resolution</div><div class="row-desc" data-bind="resDesc">Multiples of 640 &times; 480</div></div>
                   <div class="row-control">
                     <div class="seg seg-wide" data-setting="res">
                       <button data-value="1">1&times;</button>
@@ -556,10 +557,45 @@
                 <div class="row-text"><div class="row-label">Screenshots</div><div class="row-desc">F12 in the game</div></div>
                 <div class="row-control"><button class="btn btn-small" data-open-shots>Open folder</button></div>
               </div>
+              <div class="row">
+                <div class="row-text"><div class="row-label">Texture dump</div><div class="row-desc">Ctrl + F9 to toggle</div></div>
+                <div class="row-control row-buttons">
+                  <button class="toggle" role="switch" data-setting="texDump" aria-checked="false" aria-label="Texture dump"><span class="toggle-track"><span class="toggle-knob"></span></span></button>
+                  <button class="btn btn-small" data-open-dump>Open folder</button>
+                </div>
+              </div>
             </div>
           </div>
 
         </div>
+      </section>
+
+      <!-- MODS: the stack on the beam (src/mods.js) -->
+      <section class="page page-mods" data-page="mods" aria-label="Mods" data-master="on" data-count="0" hidden>
+        <div class="mods-head">
+          <div class="mods-master">
+            <span class="row-label">Mods</span>
+            <button class="toggle" role="switch" data-setting="mods" aria-checked="true" aria-label="Mods"><span class="toggle-track"><span class="toggle-knob"></span></span></button>
+            <span class="mods-count" data-bind="modsCount"></span>
+          </div>
+          <div class="mods-actions">
+            <button class="btn btn-small" data-mods-install>Install from file</button>
+            <button class="btn btn-small btn-quiet" data-mods-folder>Open mods folder</button>
+          </div>
+        </div>
+        <div class="mods-body">
+          <div class="stack-wrap" data-mods-drop>
+            <div class="beam" aria-hidden="true"><span class="beam-flow"></span></div>
+            <svg class="clash-arcs" aria-hidden="true"></svg>
+            <ol class="stack" aria-label="Mods in load order. The first wins a clash."></ol>
+            <div class="slot">
+              <span class="slot-title" data-bind="slotTitle">No mods</span>
+              <span data-bind="slotText"></span>
+            </div>
+          </div>
+          <aside class="lens" aria-live="polite" hidden></aside>
+        </div>
+        <svg class="defs" width="0" height="0" aria-hidden="true"><defs><linearGradient id="gbLensGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f80ff"/><stop offset="1" stop-color="#12c2b0"/></linearGradient></defs></svg>
       </section>
 
       <!-- UPDATES -->
@@ -831,6 +867,14 @@
         <button class="btn btn-quiet" data-sheet-close data-autofocus>Not now</button>
       </div>
     </div>
+    <div class="sheet-state" data-sheet="modremove" hidden>
+      <h2 class="sheet-title" data-bind="modRemoveTitle">Remove</h2>
+      <p class="sheet-cost">Its folder goes to the Recycle Bin.</p>
+      <div class="step-actions">
+        <button class="btn btn-primary" data-mod-remove-go>Remove</button>
+        <button class="btn btn-quiet" data-sheet-close data-autofocus>Cancel</button>
+      </div>
+    </div>
     <div class="sheet-state" data-sheet="crash" hidden>
       <h2 class="sheet-title">The game stopped with an error</h2>
       <p class="sheet-cost mono" data-bind="crashText"></p>
@@ -866,6 +910,14 @@
         <div class="seg" data-setting="speed"><button data-value="fast">20 s</button><button data-value="slow">60 s</button><span class="indicator" aria-hidden="true"></span></div>
       </div>
       <div class="mock-row"><span class="mock-label">Pretend controller</span><button class="toggle" role="switch" data-setting="padSim" aria-checked="false" aria-label="Pretend a controller is connected"><span class="toggle-track"><span class="toggle-knob"></span></span></button></div>
+      <div class="mock-row"><span class="mock-label">Mods</span>
+        <div class="seg" data-setting="mockMods"><button data-value="none">None</button><button data-value="sample">Sample</button><span class="indicator" aria-hidden="true"></span></div>
+      </div>
+      <div class="mock-row"><span class="mock-label">Next zip</span>
+        <div class="cycler" data-focus tabindex="0" role="spinbutton" data-setting="mockZip" data-options='["New mod","Update of an installed mod","No manifest","Contains a program","Unsafe path","Not a mod"]'>
+          <span class="cyc-arrow cyc-prev" aria-hidden="true">&lsaquo;</span><span class="cyc-window"><span class="cyc-value"></span></span><span class="cyc-arrow cyc-next" aria-hidden="true">&rsaquo;</span>
+        </div>
+      </div>
       <div class="mock-row"><span class="mock-label">Theme</span>
         <div class="seg" data-setting="theme"><button data-value="system">System</button><button data-value="dark">Dark</button><button data-value="light">Light</button><span class="indicator" aria-hidden="true"></span></div>
       </div>

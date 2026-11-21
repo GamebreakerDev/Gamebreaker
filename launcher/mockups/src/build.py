@@ -15,9 +15,13 @@ DIRECTIONS = {
 
 def build(direction_id: str, name: str) -> Path:
     body = (SRC / "body.html").read_text(encoding="utf-8")
-    style = (SRC / "core.css").read_text(encoding="utf-8") + "\n" + (SRC / f"{direction_id}.css").read_text(encoding="utf-8")
+    style = (SRC / "core.css").read_text(encoding="utf-8") + "\n" + (SRC / f"{direction_id}.css").read_text(encoding="utf-8") + "\n" + (SRC / "mods.css").read_text(encoding="utf-8")
     motion = (SRC / f"{direction_id}.motion.js").read_text(encoding="utf-8")
     script = (SRC / "core.js").read_text(encoding="utf-8")
+    # The Mods page lives in its own file and runs inside core.js's scope.
+    if "/*@MODS@*/" not in script:
+        raise SystemExit("core.js: the /*@MODS@*/ marker is missing")
+    script = script.replace("/*@MODS@*/", (SRC / "mods.js").read_text(encoding="utf-8"))
     html = (body.replace("{{ID}}", direction_id)
                 .replace("{{NAME}}", name)
                 .replace("{{STYLE}}", style)

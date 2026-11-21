@@ -127,7 +127,12 @@ set(GAME_SOURCES
     src/gb_save.c           # save folder, backups, save-write guard, log file, fatal-error box
     src/gb_pad.c            # host controllers behind the emulated pads; replaces the toolkit's xinput_device.c at link time (GB_PADS)
     src/gb_pad_logic.c      # its rules (players, mapping, settings file); tested by tests/pad_logic_test.c
+    src/gb_cpu.c            # thread placement on processors with performance and efficiency cores
+    src/gb_cpu_logic.c      # its decision; tested by tests/cpu_logic_test.c
     src/gb_bgsound.c        # the game's sound while its window is not in front (GB_BG_SOUND)
+    src/gb_mods.c           # the player's replacement files from the mods folder (GB_MODS, GB_MODS_DIR)
+    src/gb_mouse.c          # the mouse in menus (GB_MOUSE_MENUS)
+    src/gb_textures.c       # mods' pictures drawn in place of game textures by fingerprint; the maker's texture dump
     res/gamebreaker_game.rc # the program's icon and version information
     # Add game-specific sources here, e.g.:
     # src/asset_loader.c
@@ -151,8 +156,22 @@ add_executable(${PROJECT_NAME} WIN32
 )
 
 # The version shown on the start screen. A release can set its own.
+# Defined only for the files that use it, so a new version recompiles those
+# files and not the whole game: an update then compiles only what changed.
 set(GB_VERSION "0.1.0" CACHE STRING "Version shown on the start screen")
-target_compile_definitions(${PROJECT_NAME} PRIVATE GB_VERSION_STR="${GB_VERSION}")
+set_property(SOURCE src/gb_overlay.c src/gb_save.c APPEND PROPERTY
+    COMPILE_DEFINITIONS "GB_VERSION_STR=\"${GB_VERSION}\"")
+# The program's version information (Properties, Details) follows it too. The
+# resource compiler drops quotes given on its command line, so the values go
+# through a small generated header (rewritten only when they change).
+set(GB_VER_NUM "0,0,0,0")
+if(GB_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
+    set(GB_VER_NUM "${CMAKE_MATCH_1},${CMAKE_MATCH_2},${CMAKE_MATCH_3},0")
+endif()
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gb_version_rc.h
+     CONTENT "#define GB_VERSION_STR \"@GB_VERSION@\"\n#define GB_VER_NUM @GB_VER_NUM@\n" @ONLY)
+set_property(SOURCE res/gamebreaker_game.rc APPEND PROPERTY
+    OBJECT_DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/gb_version_rc.h)
 
 
 # Link against the xboxrecomp umbrella target (all 6 runtime libraries)

@@ -54,6 +54,7 @@ typedef void (*recomp_func_t)(void);
 #include <xbox/xboxrecomp.h>   /* RECOMP_TLS */
 #include "gb_overlay.h"            /* the movie being played, the start screen */
 #include "gb_log.h"                /* the log for bug reports */
+#include "gb_mods.h"               /* the player's replacement files */
 int gb_d3d11_reflip(void);           /* gb_d3d11.c: show the start screen while the boot waits */
 
 /* Thread-local in the runtime; a plain extern would read the wrong copy. */
@@ -203,6 +204,222 @@ void sub_00205940_enter(void)
         sub_00205600();
         g_eax = a; g_ecx = c; g_edx = d; g_ebp = bp; g_seh_ebp = sbp;
     }
+}
+
+/* ── D3D's kick-off: wait instead of spin ──────────────────────
+ *
+ * D3D's kick-off (guest 0x00205600, device in ecx) publishes the write
+ * position to the GPU. Before it does, it sets the write-back flush bit
+ * (bit 16 of GPU register 0x100410) and loops on that bit, with no call in
+ * the loop, until the "GPU" clears it. Here the GPU is the toolkit's executor
+ * thread, which clears the bit between commands and once per pass, and its
+ * pass includes the 60 Hz frame limit. So the game's main thread spins
+ * through most of every frame: the one processor the game's threads are
+ * pinned to runs at 100% though the game's own work is about 1 ms a frame.
+ * On a desktop that costs nothing visible; on a laptop it is heat and power
+ * taken from the budget the executor needs. A second routine (0x002056E0)
+ * makes the same wait before it publishes a position.
+ *
+ * Both are written here by hand, the rest of each as the game has it, with the
+ * wait changed. Three ways to wait:
+ *   spin   the game's own loop.
+ *   timer  spin on the bit (with the processor's pause hint) for up to 2 ms,
+ *          then sleep on a high-resolution waitable timer in 250 us steps. A
+ *          match makes about 40 kick-offs a frame and the executor answers
+ *          most of them during its walk, within the 2 ms; only the one long
+ *          wait a frame, while the executor sits in its frame limit, is slept
+ *          through. (Sleeping after 50 us cost a quarter of the frame rate.)
+ *   event  spin briefly, then wait on the event the executor sets when it
+ *          clears the bit (the toolkit patch's xbox_Nv2aAckedEvent); the
+ *          executor itself sleeps when it has nothing to do and the kick-off
+ *          wakes it (xbox_Nv2aKick, xbox_Nv2aSetIdleWait). Every wait has a
+ *          time limit, so a missed signal costs a millisecond, never a hang.
+ *          The default, at every rate: in a match the main thread uses about
+ *          5% of a core instead of 99%, at the same frame rate.
+ * Kick-offs made while the game records into a pushbuffer of its own (device
+ * flags bit 13) do not wait; they go to the lifted function unchanged.
+ *
+ * Addresses are for the pinned executable (XDK 5233 D3D):
+ *   device+0x00     write position          device+0x08  flags
+ *   device+0x358    write position while recording (flags bit 2)
+ *   device+0x17C0   the GPU's DMA channel   [0x0020FCC8]+0x17C8  GPU registers
+ *   0x0020F820      non-zero: call 0x002007E0 until it returns 0, then set
+ *                   flags bit 13 (0x00205600 only; 0x002056E0 always calls it)
+ */
+#define GB_KICK_SPIN   0
+#define GB_KICK_TIMER  1
+#define GB_KICK_EVENT  2
+#define GB_KICK_WAIT_DEFAULT  GB_KICK_EVENT
+#define GB_KICK_POLL_US       2000     /* timer: spin this long before the first sleep */
+#define GB_KICK_EVENT_US      20       /* event: spin this long before waiting */
+#define GB_KICK_STEP_US       250      /* timer: sleep in steps of this */
+#define GB_NV2A_IDLE_MS       1        /* event: the executor's longest idle sleep */
+
+extern void sub_00205600_gen(void);
+extern void sub_002056E0_gen(void);
+extern void sub_002007E0(void);
+extern void xbox_Nv2aSetIdleWait(int ms);  /* the toolkit patch */
+extern void xbox_Nv2aKick(void);
+extern void *xbox_Nv2aAckedEvent(void);
+
+static struct {
+    volatile LONG state;               /* 0 not read, 1 reading, 2 ready */
+    int mode;
+    LONG poll_ticks, step_100ns;
+    HANDLE acked;
+    LARGE_INTEGER freq;
+} s_kick;
+
+static RECOMP_TLS HANDLE t_kick_timer;
+
+static void gb_kick_start(void)
+{
+    int idle_ms;
+
+    for (;;) {
+        LONG s = InterlockedCompareExchange(&s_kick.state, 1, 0);
+        if (s == 2) return;
+        if (s == 0) break;
+        YieldProcessor();
+    }
+    QueryPerformanceFrequency(&s_kick.freq);
+    s_kick.mode = GB_KICK_WAIT_DEFAULT;
+    idle_ms = GB_NV2A_IDLE_MS;
+    s_kick.poll_ticks = (LONG)(s_kick.freq.QuadPart
+                               * (s_kick.mode == GB_KICK_TIMER ? GB_KICK_POLL_US
+                                                               : GB_KICK_EVENT_US) / 1000000);
+    s_kick.step_100ns = GB_KICK_STEP_US * 10;
+    s_kick.acked = (HANDLE)xbox_Nv2aAckedEvent();
+    if (s_kick.mode == GB_KICK_EVENT && !s_kick.acked)
+        s_kick.mode = GB_KICK_TIMER;
+    /* The executor sleeps when idle only when the kick-off wakes it. */
+    xbox_Nv2aSetIdleWait(s_kick.mode == GB_KICK_EVENT ? idle_ms : 0);
+    InterlockedExchange(&s_kick.state, 2);
+}
+
+/* Set the flush bit, tell the executor, and wait until it is cleared. */
+static void gb_kick_flush(void)
+{
+    uint32_t regs = GB_MEM32(GB_MEM32(GB_D3D_DEVICE_PTR_VA) + 0x17C8);
+    volatile uint32_t *bit = &GB_MEM32(regs + 0x100410);
+    LARGE_INTEGER t0, t, due;
+
+    *bit = *bit | 0x10000u;
+    xbox_Nv2aKick();
+    if (s_kick.mode == GB_KICK_SPIN) {
+        while (*bit & 0x10000u)
+            ;
+        return;
+    }
+    QueryPerformanceCounter(&t0);
+    do {
+        if (!(*bit & 0x10000u)) {
+            return;
+        }
+        YieldProcessor();
+        QueryPerformanceCounter(&t);
+    } while (t.QuadPart - t0.QuadPart < s_kick.poll_ticks);
+    if (s_kick.mode == GB_KICK_EVENT) {
+        while (*bit & 0x10000u) {
+            WaitForSingleObject(s_kick.acked, 1);  /* the limit: a missed set costs 1 ms */
+        }
+    } else {
+        if (!t_kick_timer) {
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+            t_kick_timer = CreateWaitableTimerExW(NULL, NULL,
+                                                  CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                                  TIMER_ALL_ACCESS);
+            if (!t_kick_timer) {            /* before Windows 10 1803: spin as the game does */
+                while (*bit & 0x10000u)
+                    YieldProcessor();
+                return;
+            }
+        }
+        due.QuadPart = -(LONGLONG)s_kick.step_100ns;
+        while (*bit & 0x10000u) {
+            SetWaitableTimer(t_kick_timer, &due, 0, NULL, NULL, FALSE);
+            WaitForSingleObject(t_kick_timer, 50);
+        }
+    }
+}
+
+
+/* Calls 0x002007E0 until it returns 0, as both functions do (return address
+ * 0x0020566D or 0x00205745). */
+static void gb_kick_drain(uint32_t ret, uint32_t sbp)
+{
+    do {
+        g_ebp = sbp;
+        g_seh_ebp = sbp;
+        g_esp -= 4;
+        GB_MEM32(g_esp) = ret;              /* return address, popped by the callee */
+        sub_002007E0();
+    } while (g_eax);
+}
+
+void sub_00205600(void)
+{
+    uint32_t dev = g_ecx, flags, put, sbp = g_seh_ebp;
+
+    if (s_kick.state != 2)
+        gb_kick_start();
+    flags = GB_MEM32(dev + 0x08);
+    if (flags & 0x2000u) {
+        sub_00205600_gen();
+        xbox_Nv2aKick();
+        return;
+    }
+    put = (flags & 4u) ? GB_MEM32(dev + 0x358) : GB_MEM32(dev);
+    gb_kick_flush();
+    /* From here as the function goes on (0x0020564C): the device is kept on
+     * the stack across the call, as the function keeps ecx there. */
+    g_esp -= 4;
+    GB_MEM32(g_esp) = dev;
+    put &= 0x0FFFFFFFu;
+    GB_MEM32(GB_MEM32(dev + 0x17C0) + 0x40) = put;
+    xbox_Nv2aKick();
+    g_edx = put;
+    g_eax = GB_MEM32(0x0020F820u);
+    if (g_eax) {
+        gb_kick_drain(0x0020566Du, sbp);
+        GB_MEM32(dev + 0x08) = GB_MEM32(dev + 0x08) | 0x2000u;
+        g_eax = dev;
+    }
+    g_ecx = dev;
+    g_esp += 4;                             /* the device */
+    g_ebp = sbp;
+    g_seh_ebp = sbp;
+    g_esp += 4;                             /* ret */
+}
+
+void sub_002056E0(void)
+{
+    uint32_t dev = g_ecx, flags, put, sbp = g_seh_ebp;
+
+    if (s_kick.state != 2)
+        gb_kick_start();
+    flags = GB_MEM32(dev + 0x08);
+    if (flags & 0x2000u) {
+        sub_002056E0_gen();
+        return;
+    }
+    put = (flags & 4u) ? GB_MEM32(dev + 0x358) : GB_MEM32(dev);
+    gb_kick_flush();
+    /* From here as the function goes on (0x0020572C). */
+    g_esp -= 4;
+    GB_MEM32(g_esp) = dev;
+    put &= 0x0FFFFFFFu;
+    GB_MEM32(GB_MEM32(dev + 0x17C0) + 0x40) = put;
+    xbox_Nv2aKick();
+    g_edx = put;
+    gb_kick_drain(0x00205745u, sbp);
+    g_ecx = GB_MEM32(g_esp);
+    g_esp += 4;                             /* the device */
+    g_ebp = sbp;
+    g_seh_ebp = sbp;
+    g_esp += 4;                             /* ret */
 }
 
 #define GB_MEM8(va) \
@@ -577,6 +794,10 @@ static struct {
     LONG test_at;
     volatile LONG widen_flag;               /* the guard widened the thread's cores */
     DWORD_PTR cores;                        /* what they were */
+    volatile LONG64 last_edge;              /* when a wait last began or ended */
+    volatile LONG hold_left;                /* passes left on any core */
+    LONG hold;                              /* how many the last widening asked for */
+    volatile LONG64 restored_at;            /* when the thread last went back to its core */
 } s_snd_wait;
 
 
@@ -588,42 +809,67 @@ static DWORD WINAPI gb_snd_guard(LPVOID unused)
     (void)unused;
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
     for (;;) {
-        LONG64 ws;
+        LONG64 ws, edge;
         LARGE_INTEGER now;
         double over;
         LONG asked;
 
         Sleep(20);
-        ws = s_snd_wait.wait_start;
-        if (ws != cur) {
-            cur = ws;
+        /* Watched from the last edge of a wait (its start or its end), so a
+         * thread held between two waits is seen too: that is where the first
+         * version of this guard lost it (see the hold below). */
+        edge = s_snd_wait.last_edge;
+        if (edge != cur) {
+            cur = edge;
             stage = 0;
         }
-        if (!ws)
+        if (!edge)
             continue;
-        asked = s_snd_wait.wait_ms;
+        ws = s_snd_wait.wait_start;
+        asked = ws ? s_snd_wait.wait_ms : 0;
         QueryPerformanceCounter(&now);
-        over = (double)(now.QuadPart - ws) * 1000.0 / (double)s_snd_wait.freq.QuadPart
-             - (double)asked;
+        over = (double)(now.QuadPart - (ws ? ws : edge)) * 1000.0
+             / (double)s_snd_wait.freq.QuadPart - (double)asked;
         if (stage == 0 && over > 100.0) {
-            DWORD_PTR all = 0, sys_mask = 0, was;
+            DWORD_PTR all = 0, sys_mask = 0;
+            GROUP_AFFINITY ga;
+            int widened = 0;
 
             /* Act first, report after. In every stall caught so far the
              * thread's wait had ended and Windows had it READY, but kept it
              * off the one core it is pinned to while the game's main thread
              * ran there. The event ends a wait the timer missed; letting the
-             * thread run on any core ends the other case. Its cores are put
-             * back when it returns. */
+             * thread run on any core ends the other case.
+             *
+             * The thread puts its own cores back, and only after it has run
+             * a number of passes on any core (hold_left). Put back at once,
+             * as the first version did, it pinned itself to the held core the
+             * moment its wait ended and was stuck again outside any wait,
+             * where that version did not look. If it has to be widened again
+             * within 5 s of going back, the hold doubles (100 passes, about
+             * a second, up to 6,400). */
             stage = 2;
             InterlockedIncrement(&s_snd_wait.kicks);
             SetEvent(s_snd_wait.kick);
+            memset(&ga, 0, sizeof(ga));
             GetProcessAffinityMask(GetCurrentProcess(), &all, &sys_mask);
-            was = all ? SetThreadAffinityMask(s_snd_wait.thread, all) : 0;
-            if (was) {
-                s_snd_wait.cores = was;
+            if (all && !s_snd_wait.widen_flag
+                    && GetThreadGroupAffinity(s_snd_wait.thread, &ga) && ga.Mask != all) {
+                LONG64 back = s_snd_wait.restored_at;
+
+                s_snd_wait.hold = back && now.QuadPart - back < 5 * s_snd_wait.freq.QuadPart
+                                ? (s_snd_wait.hold < 3200 ? s_snd_wait.hold * 2 : 6400) : 100;
+                s_snd_wait.cores = ga.Mask;
+                InterlockedExchange(&s_snd_wait.hold_left, s_snd_wait.hold);
                 InterlockedExchange(&s_snd_wait.widen_flag, 1);
-                InterlockedIncrement(&s_snd_wait.widened);
+                if (SetThreadAffinityMask(s_snd_wait.thread, all)) {
+                    widened = 1;
+                    InterlockedIncrement(&s_snd_wait.widened);
+                } else {
+                    InterlockedExchange(&s_snd_wait.widen_flag, 0);
+                }
             }
+            (void)widened;
         } else if (stage == 2 && over > 2000.0) {
             stage = 3;
         }
@@ -689,6 +935,7 @@ void sub_001CAD77(void)
     QueryPerformanceCounter(&t0);
     InterlockedExchange(&s_snd_wait.wait_ms, (LONG)ms);
     InterlockedExchange64(&s_snd_wait.wait_start, t0.QuadPart);
+    InterlockedExchange64(&s_snd_wait.last_edge, t0.QuadPart);
     if (s_snd_wait.on && ms != 0u && ms < 60000u) {
         HANDLE h[2] = { s_snd_wait.timer, s_snd_wait.kick };
         LARGE_INTEGER due;
@@ -719,8 +966,23 @@ void sub_001CAD77(void)
         sub_001CAD77_gen();
         InterlockedExchange64(&s_snd_wait.wait_start, 0);
     }
-    if (InterlockedExchange(&s_snd_wait.widen_flag, 0)) {
-        SetThreadAffinityMask(GetCurrentThread(), s_snd_wait.cores);
+    {
+        LARGE_INTEGER te;
+
+        QueryPerformanceCounter(&te);
+        InterlockedExchange64(&s_snd_wait.last_edge, te.QuadPart);
+        /* Widened by the guard: back to its own cores only after the passes
+         * the guard asked for (see gb_snd_guard). */
+        if (s_snd_wait.widen_flag && InterlockedDecrement(&s_snd_wait.hold_left) < 0) {
+            /* Recorded before the cores go back: if the core is still held,
+             * the thread stops right after SetThreadAffinityMask. */
+            LONG ran = s_snd_wait.hold;     /* the guard may change it once the flag is clear */
+
+            InterlockedExchange64(&s_snd_wait.restored_at, te.QuadPart);
+            InterlockedExchange(&s_snd_wait.widen_flag, 0);
+            SetThreadAffinityMask(GetCurrentThread(), s_snd_wait.cores);
+            (void)ran;
+        }
     }
     (void)by;
     (void)n;
@@ -1656,6 +1918,11 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va >= 0xFE000000u
             && xbox_va == GB_MEM32(GB_KTHUNK_KESETTIMEREX))
         return gb_KeSetTimerEx;
+    if (xbox_va >= 0xFE000000u) {
+        recomp_func_t m = gb_mods_lookup(xbox_va);   /* NULL with no mod on */
+        if (m)
+            return m;
+    }
 
     return (recomp_func_t)0;
 }

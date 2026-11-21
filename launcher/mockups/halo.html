@@ -465,6 +465,7 @@ b { font-weight: 650; }
 @property --hy   { syntax: '<percentage>'; inherits: true; initial-value: 92%; }
 @property --hs   { syntax: '<length>';     inherits: true; initial-value: 480px; }
 @property --hp   { syntax: '<number>';     inherits: true; initial-value: 0; }
+@property --okmix { syntax: '<number>';    inherits: true; initial-value: 0; }
 @property --rot  { syntax: '<angle>';      inherits: true; initial-value: 0deg; }
 
 :root {
@@ -519,7 +520,7 @@ b { font-weight: 650; }
 .app {
   display: block; overflow: clip;
   --seam: 27%; --hx: 94%; --hy: 92%; --hs: 30rem;
-  transition: --seam var(--t-slow) var(--ease-out), --hx var(--t-xslow) var(--ease-out), --hy var(--t-xslow) var(--ease-out), --hs var(--t-xslow) var(--ease-out), --hp 200ms linear;
+  transition: --seam var(--t-slow) var(--ease-out), --hx var(--t-xslow) var(--ease-out), --hy var(--t-xslow) var(--ease-out), --hs var(--t-xslow) var(--ease-out), --hp var(--hp-t, 200ms) var(--hp-e, linear), --okmix var(--ok-t, 900ms) ease-in-out;
 }
 .app[data-mode="main"]                  { --seam: 21%; --hx: 13%; --hy: 106%; --hs: 24rem; }
 .app[data-mode="main"][data-view="home"]{ --seam: 36%; --hx: 56%; --hy: 48%; --hs: 33rem; }
@@ -539,7 +540,8 @@ b { font-weight: 650; }
 .hp-l .halo { translate: calc(-50% - .9rem) calc(-50% + 1.7rem); opacity: .55; }   /* slipped along the break */
 .halo span { position: absolute; inset: 0; border-radius: 50%; transition: opacity var(--t-med) var(--ease); }
 .halo-line, .halo-glow::before {
-  background: conic-gradient(from var(--rot), var(--art-1), var(--art-2), var(--art-3), var(--art-1));
+  /* --okmix tints the ring green when a job is done, and eases back */
+  background: conic-gradient(from var(--rot), color-mix(in oklab, var(--art-1), var(--ok) calc(var(--okmix) * 1%)), color-mix(in oklab, var(--art-2), var(--ok) calc(var(--okmix) * 1%)), color-mix(in oklab, var(--art-3), var(--ok) calc(var(--okmix) * 1%)), color-mix(in oklab, var(--art-1), var(--ok) calc(var(--okmix) * 1%)));
   animation: halo-rot 40s linear infinite;
 }
 .halo-line, .halo-fill {
@@ -550,7 +552,7 @@ b { font-weight: 650; }
 .halo-glow::before { content: ""; position: absolute; inset: 0; border-radius: 50%;
   -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 1.3rem), #000 calc(100% - 1.2rem), #000 calc(100% - 1px), transparent 100%);
           mask: radial-gradient(closest-side, transparent calc(100% - 1.3rem), #000 calc(100% - 1.2rem), #000 calc(100% - 1px), transparent 100%); }
-.halo-fill { background: conic-gradient(var(--accent) 0, var(--art-2) calc(var(--hp) * 1%), transparent 0); opacity: 0; }
+.halo-fill { background: conic-gradient(color-mix(in oklab, var(--accent), var(--ok) calc(var(--okmix) * 1%)) 0, color-mix(in oklab, var(--art-2), var(--ok) calc(var(--okmix) * 1%)) calc(var(--hp) * 1%), transparent 0); opacity: 0; }
 @keyframes halo-rot { to { --rot: 360deg; } }
 
 .app[data-halo="work"] .halo-line { opacity: .16; }
@@ -558,7 +560,9 @@ b { font-weight: 650; }
 .app[data-halo="work"] .halo-fill { opacity: 1; }
 .app[data-halo="spin"] .halo-line, .app[data-halo="spin"] .halo-glow::before { animation-duration: 2.2s; }
 .app[data-halo="error"] .halo-line, .app[data-halo="error"] .halo-glow::before { background: conic-gradient(from 28deg, var(--danger) 0 78%, transparent 78%); animation: none; }
-.app[data-halo="ok"] .halo-line, .app[data-halo="ok"] .halo-glow::before { background: var(--ok); animation: none; }
+.app[data-halo="ok"] { --okmix: 100; --ok-t: 350ms; }
+.app[data-halo="ok"] .halo-fill, .app[data-halo="settle"] .halo-fill { opacity: 1; }
+.app[data-halo="settle"] { --hp-t: 650ms; --hp-e: cubic-bezier(.4, 0, .2, 1); }
 
 /* Fine grain over everything, so the dark never looks flat */
 .app::after { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: .05; mix-blend-mode: overlay;
@@ -724,8 +728,16 @@ b { font-weight: 650; }
    parallelogram at the seam's angle; its text stays upright.
    The surface is a skewed pseudo-element behind the content.
    =================================================================== */
-.app .btn, .app .btn:hover:not(:disabled), .app .seg, .app .cycler, .app .ring-tag, .app .ring-tag:hover, .app .toast, .app .pick-tile, .app .pick-tile:hover, .app .file-card {
+.app .btn, .app .seg, .app .cycler, .app .ring-tag, .app .toast, .app .pick-tile, .app .file-card {
   position: relative; isolation: isolate; background: none; border-color: transparent; border-radius: 0; box-shadow: none;
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+/* Hover only clears the base sheet's hover surface. It must never move a control:
+   a hover rule that set position here outranked a control's own placement (the
+   Updates page's Check now, the ring's update tag), so the control jumped away
+   from the pointer, lost hover, jumped back, and flickered. */
+.app .btn:hover:not(:disabled), .app .ring-tag:hover, .app .pick-tile:hover {
+  background: none; border-color: transparent; box-shadow: none;
   -webkit-backdrop-filter: none; backdrop-filter: none;
 }
 .app .ring-tag { position: absolute; }
@@ -990,6 +1002,176 @@ b { font-weight: 650; }
 .ver:first-child { border-top: 0; }
 .ver > .btn { grid-column: 2; grid-row: 2; justify-self: start; }
 
+/* ===================================================================
+   MODS: the stack on the beam.
+   Load order is a flow of light from top to bottom: the first mod on the
+   beam is read first and wins a clash. A mod that is on touches the beam;
+   one that is off slides out of it. The lens beside the stack is a small
+   ring (a status, so a circle) whose lit arc is the share of the mod's
+   files that reach the game.
+   =================================================================== */
+.page-mods { display: flex; flex-direction: column; gap: 1rem; overflow: hidden; padding-bottom: 1rem; }
+.mods-head { display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap; padding-left: 2.2rem; }
+.mods-master { display: flex; align-items: center; gap: .9rem; }
+.mods-master .row-label { font-family: var(--font-display); font-size: 1.35rem; font-weight: var(--display-weight); letter-spacing: var(--display-tracking); }
+.mods-count { color: var(--text-3); font-size: .9rem; min-width: 5.5rem; }
+.mods-actions { display: flex; gap: .6rem; margin-left: auto; }
+
+.mods-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(17rem, 1fr); gap: 2.4rem; }
+
+/* ---------- the stack ---------- */
+.stack-wrap { position: relative; min-height: 0; overflow: hidden auto; padding: .6rem 1.2rem 2rem 2.2rem; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.beam { position: absolute; left: 1.1rem; top: 0; bottom: 0; width: 2px; pointer-events: none;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--art-1) 70%, transparent) 6%, color-mix(in srgb, var(--art-2) 60%, transparent) 70%, transparent);
+  box-shadow: 0 0 .9rem color-mix(in srgb, var(--art-1) 50%, transparent); opacity: .85;
+  transition: opacity var(--t-slow) var(--ease), filter var(--t-slow) var(--ease); }
+.beam-flow { position: absolute; left: -2px; width: 6px; height: 7rem; top: -7rem; border-radius: 3px;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--art-2) 80%, white 20%), transparent);
+  filter: blur(1px); opacity: .5; animation: beam-flow 5.5s linear infinite; }
+@keyframes beam-flow { to { transform: translateY(calc(100vh + 7rem)); } }
+.page-mods[data-master="off"] .beam { opacity: .18; filter: grayscale(1); }
+.page-mods[data-master="off"] .beam-flow { animation-play-state: paused; opacity: 0; }
+
+.clash-arcs { position: absolute; left: 0; top: 0; width: 2.2rem; height: 100%; overflow: visible; pointer-events: none; }
+.clash-arcs path { fill: none; stroke: var(--art-3); stroke-width: 1.8; opacity: .85; stroke-dasharray: 3 4; animation: arc-run 2.4s linear infinite; }
+.clash-arcs circle { fill: var(--art-3); opacity: .8; }
+.clash-arcs text { fill: var(--art-3); font: 600 10px var(--font-mono); opacity: .9; }
+@keyframes arc-run { to { stroke-dashoffset: -14; } }
+.page-mods[data-master="off"] .clash-arcs { opacity: 0; }
+
+.stack { list-style: none; display: flex; flex-direction: column; gap: .7rem; position: relative; }
+
+/* A plate: a slanted surface, upright content. */
+.plate { position: relative; isolation: isolate; display: grid; grid-template-columns: 2.2rem 3rem minmax(0, 1fr); align-items: center; gap: 1rem;
+  min-height: 4.4rem; padding: .55rem 1.4rem .55rem .6rem; cursor: default; outline: none; user-select: none;
+  transition: transform var(--t-slow) var(--ease-out), opacity var(--t-slow) var(--ease), filter var(--t-slow) var(--ease); }
+.plate::before { content: ""; position: absolute; inset: 0; z-index: -1; transform: skewX(var(--lean-deg)); border-radius: .3rem;
+  background: var(--surface); border: 1px solid var(--line);
+  transition: background-color var(--t-fast), border-color var(--t-fast), box-shadow var(--t-med); }
+.plate::after { /* the light that crosses the plate when it joins the beam */
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; transform: skewX(var(--lean-deg)); border-radius: .3rem;
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--art-2) 30%, transparent) 50%, transparent 70%) no-repeat 170% 0 / 260% 100%; opacity: 0; }
+.plate.lit::after { opacity: 1; background-position: -70% 0; transition: background-position 900ms var(--ease), opacity 200ms; }
+.plate:hover::before { background: var(--surface-2); }
+.plate:focus::before, .plate.selected::before { background: var(--surface-2); border-color: var(--line-strong); }
+.plate:focus { transform: translateX(.35rem); }
+
+/* the contact: a slanted bridge from the beam into the plate */
+.plate-contact { position: absolute; left: -1.25rem; top: 50%; width: 1.7rem; height: .32rem; margin-top: -.16rem; border-radius: 1px;
+  transform: skewX(var(--lean-deg)); background: linear-gradient(90deg, var(--art-1), var(--art-2));
+  box-shadow: 0 0 .8rem color-mix(in srgb, var(--art-2) 60%, transparent); transform-origin: left center;
+  transition: transform var(--t-slow) var(--ease-out), opacity var(--t-med); cursor: pointer; }
+.plate-contact::after { content: ""; position: absolute; inset: -.7rem -.2rem; } /* a bigger target for the mouse */
+.plate[data-on="0"] { transform: translateX(1.9rem); opacity: .5; filter: saturate(.25); }
+.plate[data-on="0"]:focus { transform: translateX(2.2rem); opacity: .8; }
+.plate[data-on="0"] .plate-contact { transform: skewX(var(--lean-deg)) scaleX(.18); opacity: .5; background: var(--text-3); box-shadow: none; }
+.page-mods[data-master="off"] .plate { filter: saturate(.15); opacity: .55; }
+.page-mods[data-master="off"] .plate-contact { opacity: .25; box-shadow: none; }
+
+.plate-index { font-family: var(--font-mono); font-size: .78rem; color: var(--text-3); text-align: right; }
+.plate[data-on="1"] .plate-index { color: var(--art-2); }
+.plate-icon { width: 3rem; height: 3rem; display: block; object-fit: cover; image-rendering: auto;
+  clip-path: polygon(14% 0, 100% 0, 86% 100%, 0 100%); background: var(--surface-2); }
+.plate-text { min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
+.plate-name { font-weight: 620; font-size: 1.02rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plate-meta { font-size: .82rem; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plate-side { display: flex; flex-direction: column; align-items: flex-end; gap: .25rem; font-size: .8rem; color: var(--text-3); white-space: nowrap; }
+.plate-clash { position: relative; isolation: isolate; padding: .05rem .55rem; color: var(--art-3); font-weight: 600; }
+.plate-clash::before { content: ""; position: absolute; inset: 0; z-index: -1; transform: skewX(var(--lean-deg)); border-radius: .2rem;
+  border: 1px solid color-mix(in srgb, var(--art-3) 45%, transparent); background: color-mix(in srgb, var(--art-3) 9%, transparent); }
+.plate-warn { color: var(--warn); }
+
+/* lifted for a move (controller X, or a drag) */
+.plate.lifted { z-index: 2; transform: translateX(.9rem) scale(1.015); }
+.plate.lifted::before { border-color: var(--accent); box-shadow: 0 1.1rem 2.4rem -1rem color-mix(in srgb, var(--accent) 70%, transparent); }
+.plate.dragging { transition: none; z-index: 3; }
+.stack.reordering .plate:not(.dragging) { transition: transform 220ms var(--ease-out), opacity var(--t-slow), filter var(--t-slow); }
+
+/* the incoming package: dashed until installed, filled by the install */
+.plate.incoming::before { border-style: dashed; border-color: color-mix(in srgb, var(--accent) 70%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.plate.incoming .plate-contact { transform: skewX(var(--lean-deg)) scaleX(.45); opacity: .6; }
+.plate-fill { position: absolute; inset: 0; z-index: -1; pointer-events: none; transform: skewX(var(--lean-deg)); border-radius: .3rem; overflow: hidden; }
+.plate-fill::before { content: ""; position: absolute; inset: 0; transform-origin: left center; transform: scaleX(calc(var(--p, 0) / 100));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 35%, transparent), color-mix(in srgb, var(--art-2) 30%, transparent)); transition: transform 200ms linear; }
+/* refused: the plate parts along its slant, as the mark does, and dims */
+.plate.refused::before { border-color: color-mix(in srgb, var(--danger) 55%, transparent); border-style: solid; background: color-mix(in srgb, var(--danger) 6%, transparent);
+  clip-path: polygon(0 0, 52% 0, 44% 100%, 0 100%); transform: skewX(var(--lean-deg)) translateX(-.8rem) rotate(-.6deg); transition: transform 900ms var(--ease-out); }
+.plate.refused .plate-fill { clip-path: polygon(56% 0, 100% 0, 100% 100%, 48% 100%); transform: skewX(var(--lean-deg)) translateX(.8rem) rotate(.6deg); }
+.plate.refused .plate-fill::before { transform: none; background: color-mix(in srgb, var(--danger) 6%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent); }
+.plate.refused .plate-contact { opacity: 0; }
+.plate.refused .plate-icon { filter: grayscale(1); opacity: .6; }
+
+/* empty: one waiting slot on the beam; it also marks where a drop lands */
+.slot { position: relative; isolation: isolate; display: flex; flex-direction: column; justify-content: center; gap: .35rem; min-height: 5.5rem; padding: 1rem 1.6rem 1rem 3.4rem; margin-top: .2rem; color: var(--text-2); }
+.slot::before { content: ""; position: absolute; inset: 0; z-index: -1; transform: skewX(var(--lean-deg)); border-radius: .3rem;
+  border: 1px dashed var(--line-strong); animation: slot-breathe 4.8s var(--ease) infinite; }
+.slot::after { content: ""; position: absolute; left: -1.25rem; top: 50%; width: 1.7rem; height: .32rem; margin-top: -.16rem; transform: skewX(var(--lean-deg)) scaleX(.3); transform-origin: left; background: var(--text-3); opacity: .5; }
+@keyframes slot-breathe { 50% { border-color: color-mix(in srgb, var(--accent) 45%, transparent); } }
+.slot-title { font-weight: 620; color: var(--text); font-size: 1.05rem; }
+.slot[hidden] { display: none; }
+.page-mods[data-count="0"] .slot { min-height: 8rem; }
+.app[data-drop="1"] .slot { display: flex; }
+.app[data-drop="1"] .slot::before { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); animation: none; }
+.app[data-drop="1"] .slot::after { transform: skewX(var(--lean-deg)) scaleX(1); background: var(--accent); opacity: 1; transition: transform var(--t-slow) var(--ease-out); }
+.app[data-drop="1"] .beam { opacity: 1; filter: brightness(1.3); }
+
+/* ---------- the lens ---------- */
+.lens { min-height: 0; overflow: hidden auto; display: flex; flex-direction: column; gap: 1rem; padding: .4rem .4rem 2rem 0; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.lens[hidden] { display: none; }
+.lens-top { display: grid; grid-template-columns: 6.6rem minmax(0, 1fr); gap: 1.2rem; align-items: center; }
+.lens-ring { position: relative; width: 6.6rem; height: 6.6rem; }
+.lens-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
+.lens-ring .r-track { fill: none; stroke: var(--line); stroke-width: 3; }
+.lens-ring .r-used { fill: none; stroke: url(#gbLensGrad); stroke-width: 3; stroke-linecap: round; transition: stroke-dasharray 700ms var(--ease-out);
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--art-2) 60%, transparent)); }
+.lens-ring .r-lost { fill: none; stroke: var(--art-3); stroke-width: 3; opacity: .7; transition: stroke-dasharray 700ms var(--ease-out), stroke-dashoffset 700ms var(--ease-out); }
+.lens[data-on="0"] .r-used { stroke: var(--text-3); filter: none; }
+.lens-ring img { position: absolute; inset: 1.05rem; width: calc(100% - 2.1rem); height: calc(100% - 2.1rem); border-radius: 50%; object-fit: cover; }
+.lens-name { font-family: var(--font-display); font-size: 1.6rem; line-height: 1.12; font-weight: var(--display-weight); letter-spacing: var(--display-tracking); overflow-wrap: anywhere; }
+.lens-meta { color: var(--text-2); font-size: .9rem; margin-top: .25rem; }
+.lens-state { font-size: .85rem; margin-top: .35rem; color: var(--text-3); }
+.lens-desc { color: var(--text); line-height: 1.45; }
+.lens-sec { display: flex; flex-direction: column; gap: .5rem; }
+.lens-h { font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
+.files { font-family: var(--font-mono); font-size: .78rem; color: var(--text-2); display: flex; flex-direction: column; gap: .15rem; max-height: 9.5rem; overflow: auto; scrollbar-width: thin; }
+.files .f-lost { color: var(--art-3); }
+.files .f-unused { color: var(--text-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-3) 60%, transparent); }
+.files .f-note { font-family: var(--font); font-size: .78rem; }
+.readme { font-size: .86rem; line-height: 1.5; color: var(--text-2); max-height: 11rem; overflow: auto; padding-right: .4rem; scrollbar-width: thin; }
+.readme h4 { color: var(--text); font-size: .92rem; margin: .5rem 0 .15rem; }
+.readme p { margin: .25rem 0; }
+.readme ul { margin: .2rem 0 .2rem 1.1rem; }
+.lens-actions { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: .3rem; }
+.lens-refusal { display: flex; flex-direction: column; gap: .4rem; }
+.lens-refusal .lens-name { color: var(--text); }
+.lens-refusal p { color: var(--text-2); }
+.btn-danger::before { border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+.btn-danger:hover:not(:disabled)::before { background: color-mix(in srgb, var(--danger) 16%, transparent); border-color: var(--danger); }
+
+@media (max-width: 1100px) {
+  .mods-body { grid-template-columns: minmax(0, 1fr); }
+  .lens { border-top: 1px solid var(--line); padding-top: 1rem; }
+}
+.nav-count { margin-left: .45rem; font-family: var(--font-mono); font-size: .75rem; color: var(--art-2); }
+.nav-count:empty { display: none; }
+.plate-meta span + span { margin-left: .9rem; }
+.slot span:empty { display: none; }
+.slot span:empty { display: none; }
+.page-mods .slot { margin-left: 0; }
+.plate-size { color: var(--text-3); }
+.readme li { position: relative; padding-left: .9rem; }
+.readme li::before { content: ""; position: absolute; left: 0; top: .45em; width: .16rem; height: .7em; background: var(--text-3); transform: skewX(var(--lean-deg)); }
+.readme ul { margin-left: .2rem; }
+.lens-actions { margin-top: 0; }
+.app[data-mode="main"][data-view="mods"] { --hx: 99%; --hy: 99%; --hs: 15rem; }
+/* tags ride on the plate's top edge, so the name keeps the whole width */
+.plate-side { position: absolute; right: 1.6rem; top: -.62rem; flex-direction: row; gap: .4rem; }
+.plate-side:empty { display: none; }
+.plate-clash { background: var(--bg); font-size: .76rem; }
+.plate-warn { position: relative; isolation: isolate; padding: .05rem .55rem; font-size: .76rem; }
+.plate-warn::before { content: ""; position: absolute; inset: 0; z-index: -1; transform: skewX(var(--lean-deg)); border-radius: .2rem; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: var(--bg); }
+.stack { gap: .95rem; padding-top: .4rem; }
+
 </style>
 </head>
 <body>
@@ -1031,6 +1213,7 @@ b { font-weight: 650; }
             <span class="indicator" aria-hidden="true"></span>
           </div>
       </div>
+      <button class="nav-item" data-goto="mods">Mods<span class="nav-count" data-bind="modsNav"></span></button>
       <button class="nav-item" data-goto="updates">Updates<span class="nav-dot" aria-label="update available"></span></button>
       <button class="nav-item" data-goto="about">About</button>
       <span class="indicator" aria-hidden="true"></span>
@@ -1078,7 +1261,7 @@ b { font-weight: 650; }
                   </div>
                 </div>
                 <div class="row">
-                  <div class="row-text"><div class="row-label">Resolution</div><div class="row-desc">Multiples of 640 &times; 480</div></div>
+                  <div class="row-text"><div class="row-label">Resolution</div><div class="row-desc" data-bind="resDesc">Multiples of 640 &times; 480</div></div>
                   <div class="row-control">
                     <div class="seg seg-wide" data-setting="res">
                       <button data-value="1">1&times;</button>
@@ -1539,10 +1722,45 @@ b { font-weight: 650; }
                 <div class="row-text"><div class="row-label">Screenshots</div><div class="row-desc">F12 in the game</div></div>
                 <div class="row-control"><button class="btn btn-small" data-open-shots>Open folder</button></div>
               </div>
+              <div class="row">
+                <div class="row-text"><div class="row-label">Texture dump</div><div class="row-desc">Ctrl + F9 to toggle</div></div>
+                <div class="row-control row-buttons">
+                  <button class="toggle" role="switch" data-setting="texDump" aria-checked="false" aria-label="Texture dump"><span class="toggle-track"><span class="toggle-knob"></span></span></button>
+                  <button class="btn btn-small" data-open-dump>Open folder</button>
+                </div>
+              </div>
             </div>
           </div>
 
         </div>
+      </section>
+
+      <!-- MODS: the stack on the beam (src/mods.js) -->
+      <section class="page page-mods" data-page="mods" aria-label="Mods" data-master="on" data-count="0" hidden>
+        <div class="mods-head">
+          <div class="mods-master">
+            <span class="row-label">Mods</span>
+            <button class="toggle" role="switch" data-setting="mods" aria-checked="true" aria-label="Mods"><span class="toggle-track"><span class="toggle-knob"></span></span></button>
+            <span class="mods-count" data-bind="modsCount"></span>
+          </div>
+          <div class="mods-actions">
+            <button class="btn btn-small" data-mods-install>Install from file</button>
+            <button class="btn btn-small btn-quiet" data-mods-folder>Open mods folder</button>
+          </div>
+        </div>
+        <div class="mods-body">
+          <div class="stack-wrap" data-mods-drop>
+            <div class="beam" aria-hidden="true"><span class="beam-flow"></span></div>
+            <svg class="clash-arcs" aria-hidden="true"></svg>
+            <ol class="stack" aria-label="Mods in load order. The first wins a clash."></ol>
+            <div class="slot">
+              <span class="slot-title" data-bind="slotTitle">No mods</span>
+              <span data-bind="slotText"></span>
+            </div>
+          </div>
+          <aside class="lens" aria-live="polite" hidden></aside>
+        </div>
+        <svg class="defs" width="0" height="0" aria-hidden="true"><defs><linearGradient id="gbLensGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f80ff"/><stop offset="1" stop-color="#12c2b0"/></linearGradient></defs></svg>
       </section>
 
       <!-- UPDATES -->
@@ -1814,6 +2032,14 @@ b { font-weight: 650; }
         <button class="btn btn-quiet" data-sheet-close data-autofocus>Not now</button>
       </div>
     </div>
+    <div class="sheet-state" data-sheet="modremove" hidden>
+      <h2 class="sheet-title" data-bind="modRemoveTitle">Remove</h2>
+      <p class="sheet-cost">Its folder goes to the Recycle Bin.</p>
+      <div class="step-actions">
+        <button class="btn btn-primary" data-mod-remove-go>Remove</button>
+        <button class="btn btn-quiet" data-sheet-close data-autofocus>Cancel</button>
+      </div>
+    </div>
     <div class="sheet-state" data-sheet="crash" hidden>
       <h2 class="sheet-title">The game stopped with an error</h2>
       <p class="sheet-cost mono" data-bind="crashText"></p>
@@ -1849,6 +2075,14 @@ b { font-weight: 650; }
         <div class="seg" data-setting="speed"><button data-value="fast">20 s</button><button data-value="slow">60 s</button><span class="indicator" aria-hidden="true"></span></div>
       </div>
       <div class="mock-row"><span class="mock-label">Pretend controller</span><button class="toggle" role="switch" data-setting="padSim" aria-checked="false" aria-label="Pretend a controller is connected"><span class="toggle-track"><span class="toggle-knob"></span></span></button></div>
+      <div class="mock-row"><span class="mock-label">Mods</span>
+        <div class="seg" data-setting="mockMods"><button data-value="none">None</button><button data-value="sample">Sample</button><span class="indicator" aria-hidden="true"></span></div>
+      </div>
+      <div class="mock-row"><span class="mock-label">Next zip</span>
+        <div class="cycler" data-focus tabindex="0" role="spinbutton" data-setting="mockZip" data-options='["New mod","Update of an installed mod","No manifest","Contains a program","Unsafe path","Not a mod"]'>
+          <span class="cyc-arrow cyc-prev" aria-hidden="true">&lsaquo;</span><span class="cyc-window"><span class="cyc-value"></span></span><span class="cyc-arrow cyc-next" aria-hidden="true">&rsaquo;</span>
+        </div>
+      </div>
       <div class="mock-row"><span class="mock-label">Theme</span>
         <div class="seg" data-setting="theme"><button data-value="system">System</button><button data-value="dark">Dark</button><button data-value="light">Light</button><span class="indicator" aria-hidden="true"></span></div>
       </div>
@@ -1944,11 +2178,11 @@ const S = {
     aniso: '16', msaa: '4', gpuPref: 'default',
     skipIntro: true, pauseBg: true, songRotate: true, demoDelay: '90', rumbleOn: true,
     smoothAudio: true, bgAudio: true, volume: 100,
-    volMusic: 100, volSfx: 100, volCrowd: 100, volPlayers: 100, volCommentary: 100, commentary: true, mono: false, showFps: false,
+    volMusic: 100, volSfx: 100, volCrowd: 100, volPlayers: 100, volCommentary: 100, commentary: true, mono: false, showFps: false, texDump: false,
     cheats: false, cheat_street_kids: false, cheat_no_counters: false, cheat_gb_trails: false, cheat_all_quicks: false, cheat_unlimited_turbo: false, cheat_easy_2_pointers: false, cheat_hard_2_pointers: false, cheat_big_heads: false, cheat_wnba_ball: false, cheat_alternate_ball: false, cheat_no_hud: false, cheat_explosive_rims: false,
     pads: false, preset: 'original', trigger: 12, deadzone: 0, rumble1: 100, rumble2: 100, rumble3: 100, rumble4: 100, padOrder: 'auto', kbPlayer: 1, padBg: false,
-    renderer: 'd3d11', updates: true, sound: true,
-    scenario: 0, speed: 'fast', padSim: false
+    renderer: 'd3d11', updates: true, sound: true, mods: true,
+    scenario: 0, speed: 'fast', padSim: false, mockMods: 'sample', mockZip: 0
   }
 };
 const scenario = () => SCEN[S.set.scenario] || 'ok';
@@ -1965,9 +2199,9 @@ const scenario = () => SCEN[S.set.scenario] || 'ok';
    2026-11-16 (format 1) has no such list: there, a value that differs from
    that time's default counts as chosen, and one equal to it as not chosen. */
 const PERSIST = ['theme', 'size', 'windowMode', 'monitor', 'res', 'aspect', 'aspect2d', 'gameHz', 'vsync', 'aniso', 'msaa', 'skipIntro', 'smoothAudio', 'bgAudio', 'volume',
-  'pads', 'preset', 'trigger', 'deadzone', 'rumble1', 'rumble2', 'rumble3', 'rumble4', 'padOrder', 'kbPlayer', 'padBg', 'gpuPref', 'updates', 'sound',
+  'pads', 'preset', 'trigger', 'deadzone', 'rumble1', 'rumble2', 'rumble3', 'rumble4', 'padOrder', 'kbPlayer', 'padBg', 'gpuPref', 'updates', 'sound', 'mods',
   'pauseBg', 'songRotate', 'demoDelay', 'rumbleOn',
-  'volMusic', 'volSfx', 'volCrowd', 'volPlayers', 'volCommentary', 'commentary', 'mono', 'showFps',
+  'volMusic', 'volSfx', 'volCrowd', 'volPlayers', 'volCommentary', 'commentary', 'mono', 'showFps', 'texDump',
   'cheats', 'cheat_street_kids', 'cheat_no_counters', 'cheat_gb_trails', 'cheat_all_quicks', 'cheat_unlimited_turbo', 'cheat_easy_2_pointers', 'cheat_hard_2_pointers', 'cheat_big_heads', 'cheat_wnba_ball', 'cheat_alternate_ball', 'cheat_no_hud', 'cheat_explosive_rims'];
 /* The renderer is always Direct3D 11 (the slow reference renderer was removed
    from the launcher, 2026-11-16); a remembered "cpu" is no longer read. */
@@ -1990,9 +2224,19 @@ function nearestShape(w, h) {
   for (const s of SHAPES) if (Math.abs(Math.log(r / s[1])) < Math.abs(Math.log(r / best[1]))) best = s;
   return best[0];
 }
-/* Resolution: Fit (the display's own) on every PC; players can turn it down. */
+/* Resolution: Fit (the display's own) on PCs with a graphics card; players can
+   turn it down. A PC whose only graphics are built into the processor starts
+   lighter: 1x, 2x anti-aliasing, 4x texture filtering. Fit with 4x
+   anti-aliasing at 1080p is about 4 million pixels a frame with four samples
+   each; on a Radeon 780M-class chip that alone is more than the 16.7 ms of a
+   frame, and the chip shares the memory the CPU's graphics thread works in.
+   Only defaults change: a value the player chose is kept. */
+const lowGpu = () => !!(LIVE && LIVE.gpu && LIVE.gpu.integratedOnly);
 const DEFAULTS = {
-  aspect: () => { const t = targetDisplay(); return t ? nearestShape(t.w, t.h) : BASE.aspect; }
+  aspect: () => { const t = targetDisplay(); return t ? nearestShape(t.w, t.h) : BASE.aspect; },
+  res: () => (lowGpu() ? '1' : BASE.res),
+  msaa: () => (lowGpu() ? '2' : BASE.msaa),
+  aniso: () => (lowGpu() ? '4' : BASE.aniso)
 };
 S.chosen = new Set();
 const defaultOf = k => (DEFAULTS[k] ? DEFAULTS[k]() : BASE[k]);
@@ -2088,7 +2332,21 @@ function consume(name) {
 
 /* The halo ring is the launcher's status light: idle, work (fills to p%),
    spin (busy, no known length), error, ok. */
-function halo(state, p) { app.dataset.halo = state; if (p !== undefined) app.style.setProperty('--hp', Math.max(0, Math.min(100, p)).toFixed(2)); }
+/* When a job ends, the ring runs back to empty and its colour eases back to
+   the resting gradient ("settle") instead of switching at once. */
+const HALO_SETTLE_MS = 1000;
+let haloT = 0;
+function halo(state, p) {
+  clearTimeout(haloT);
+  const cur = app.dataset.halo;
+  if (state === 'idle' && (cur === 'ok' || cur === 'work' || cur === 'settle')) {
+    if (cur !== 'settle') { app.dataset.halo = 'settle'; app.style.setProperty('--hp', '0'); }
+    haloT = setTimeout(() => { if (app.dataset.halo === 'settle') app.dataset.halo = 'idle'; }, HALO_SETTLE_MS);
+    return;
+  }
+  app.dataset.halo = state;
+  if (p !== undefined) app.style.setProperty('--hp', Math.max(0, Math.min(100, p)).toFixed(2));
+}
 
 /* ------------------------------------------------------------ preferences */
 const mqDark = matchMedia('(prefers-color-scheme: dark)');
@@ -2294,6 +2552,7 @@ function makeMotes(n) {
 }
 
 function dpad(dx, dy) {
+  if (MD.lifted && S.page === 'mods') { modsDpad(dy); return; }
   const el = document.activeElement;
   if (el && dx && el.matches('.slider')) return stepSlider(el, dx);
   if (el && dx && el.matches('.cycler')) return cycle(el, dx);
@@ -2311,6 +2570,7 @@ function activate() {
 let capture = null;
 addEventListener('keydown', e => {
   if (capture) { e.preventDefault(); if (!e.repeat) finishRebind(e); return; }
+  if (modsKey(e)) return;
   const k = e.key;
   if (k === '`') { e.preventDefault(); if (!LIVE || LIVE.dev) toggleMock(); return; }
   const arrows = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
@@ -2332,6 +2592,7 @@ function back() {
   tick('back');
   if (capture) return cancelRebind();
   if (padTest) return setPadTest(false);
+  if (!S.mockOpen && modsBack()) return;
   if (S.mockOpen) return toggleMock(false);
   if (S.launchOpen) return closeLaunch();
   if (S.sheetOpen) { if (!S.busy) closeSheet(); return; }
@@ -2402,6 +2663,7 @@ function hostEvent(ev) {
   else if (ev === 'left') dpad(-1, 0); else if (ev === 'right') dpad(1, 0);
   else if (ev === 'a') activate(); else if (ev === 'b') back();
   else if (ev === 'lb') bumper(-1); else if (ev === 'rb') bumper(1);
+  else if (ev === 'x' || ev === 'y') modsPad(ev);
   else if (ev === 'start' && S.mode === 'main' && S.page === 'home' && !S.sheetOpen && !S.launchOpen) openLaunch();
 }
 if (hostBridge) {
@@ -2435,11 +2697,13 @@ function pollPads(t) {
     } else held[name] = 0;
   }
   const edge = i => { const now = b(i), was = prevBtn[i]; prevBtn[i] = now; if (now) any = true; return now && !was; };
-  const A = edge(0), B = edge(1), LB = edge(4), RB = edge(5), START = edge(9);
-  for (let i = 0; i < p.buttons.length; i++) if (![0, 1, 4, 5, 9].includes(i)) { if (b(i)) any = true; prevBtn[i] = b(i); }
+  const A = edge(0), B = edge(1), X = edge(2), Y = edge(3), LB = edge(4), RB = edge(5), START = edge(9);
+  for (let i = 0; i < p.buttons.length; i++) if (![0, 1, 2, 3, 4, 5, 9].includes(i)) { if (b(i)) any = true; prevBtn[i] = b(i); }
   if (any) setInput('gamepad');
   if (A) activate();
   if (B) back();
+  if (X) modsPad('x');
+  if (Y) modsPad('y');
   if (LB) bumper(-1);
   if (RB) bumper(1);
   if (START && S.mode === 'main' && S.page === 'home' && !S.sheetOpen && !S.launchOpen) openLaunch();
@@ -2472,8 +2736,8 @@ function updatePadUI() {
 
 /* ------------------------------------------------------------------ hints */
 const GL = {
-  keyboard: { move: ['\u2191\u2193\u2190\u2192'], a: ['Enter'], b: ['Esc'], tabs: ['Q', 'E'], play: ['Enter'] },
-  gamepad: { move: ['\u271A'], a: ['A'], b: ['B'], tabs: ['LB', 'RB'], play: ['\u2630'] }
+  keyboard: { move: ['\u2191\u2193\u2190\u2192'], a: ['Enter'], b: ['Esc'], tabs: ['Q', 'E'], play: ['Enter'], order: ['Alt', '\u2191\u2193'], x: ['\u2191\u2193'], y: ['Del'] },
+  gamepad: { move: ['\u271A'], a: ['A'], b: ['B'], tabs: ['LB', 'RB'], play: ['\u2630'], order: ['X'], x: ['\u271A'], y: ['Y'] }
 };
 function glyphs(keys, kind) {
   return keys.map(k => `<span class="glyph${kind === 'gamepad' ? ' glyph-pad' + (k.length > 1 ? ' glyph-wide' : '') : ''}">${k}</span>`).join('');
@@ -2485,6 +2749,10 @@ function renderHints() {
   if (!(S.mode === 'main' && S.page === 'home' && !S.sheetOpen)) items.push([g.b, S.sheetOpen ? 'Close' : 'Back']);
   if (S.mode === 'main' && !S.sheetOpen) items.push([g.tabs, S.page === 'settings' ? 'Switch section' : 'Switch page']);
   if (S.mode === 'main' && S.page === 'home' && kind === 'gamepad' && !S.sheetOpen) items.push([g.play, 'Play']);
+  if (S.mode === 'main' && S.page === 'mods' && !S.sheetOpen) {
+    items.splice(1, 1, [g.a, 'On or off'], [g.order, 'Order'], [g.y, 'Remove']);
+    if (MD.lifted) items.splice(0, items.length, [g.x, 'Move'], [g.a, 'Place'], [g.b, 'Cancel']);
+  }
   if (S.launchOpen) items.splice(0, items.length, [g.b, 'Back']);
   if (padTest) items.splice(0, items.length, kind === 'gamepad' ? [g.b, 'Hold to finish'] : [g.b, 'Finish']);
   const html = items.map(([k, label]) => `<span class="hint">${glyphs(k, kind)}<span>${label}</span></span>`).join('');
@@ -2501,6 +2769,7 @@ function summaries() {
   bind('presetDesc', S.set.preset === 'original' ? 'Third turbo on left stick click' : 'Third turbo on LB');
   bind('resLabel', { 1: '640 \u00d7 480', 2: '1280 \u00d7 960', 3: '1920 \u00d7 1440', 4: '2560 \u00d7 1920', fit: 'Native' }[S.set.res]);
   bind('aspectDesc', S.chosen.has('aspect') ? '' : 'Matches the display');
+  bind('resDesc', lowGpu() && !S.chosen.has('res') ? 'Set for integrated graphics' : 'Multiples of 640 × 480');
   // Menus and HUD only differ from 4:3 when the shape is wider.
   const flat = S.set.aspect === '4:3';
   const r2d = $('[data-row="aspect2d"]');
@@ -2559,6 +2828,8 @@ function setSetting(key, value) {
     applyPrefs();
   }
   if (key === 'res') drawPreview(true);
+  if (key === 'mods') modsMaster();
+  if (key === 'mockMods') modsInit([]);
   if (key === 'padSim') { updatePadUI(); if (value) setInput('gamepad'); renderHints(); }
   // Two pairs of cheats share one game setting each: choosing one clears the other.
   if (value === true && CHEAT_PAIRS[key]) {
@@ -2629,19 +2900,26 @@ $$('.slider').forEach(sl => {
 });
 
 /* Keyboard keys. Each game button's key, for the player the keyboard drives;
-   the host keeps them in the player's controls.ini (key_a = Z ...). Only keys
-   that differ from the defaults are written. The names are the game's own. */
+   the host keeps them in the player's controls.ini (key_a = K ...). Only keys
+   that differ from the defaults are written. The names are the game's own.
+   The defaults must match gb_pad_keys_defaults (port\src\gb_pad_logic.c).
+   The turbos are three rows that say how many: the game counts turbos held,
+   never which, so the "2 turbos" key presses both triggers and the "3 turbos"
+   key both triggers and the left stick click (TURBO_CTLS below). */
 const KEY_COLS = [
-  [['a', 'A', 'Z'], ['b', 'B', 'X'], ['x', 'X', 'C'], ['y', 'Y', 'V'], ['black', 'Black', 'E'], ['white', 'White', 'Q'],
-   ['left_trigger', 'Left trigger', '1'], ['right_trigger', 'Right trigger', '3'], ['start', 'Start', 'enter'], ['back', 'Back', 'backspace'],
-   ['left_thumb', 'Left stick click', 'shift'], ['right_thumb', 'Right stick click', 'ctrl']],
+  [['a', 'A', 'K'], ['b', 'B', 'L'], ['x', 'X', 'J'], ['y', 'Y', 'I'], ['black', 'Black', 'E'], ['white', 'White', 'Q'],
+   ['turbo1', '1 turbo', 'lshift'], ['turbo2', '2 turbos', 'space'], ['turbo3', '3 turbos', 'semicolon'],
+   ['start', 'Start', 'enter'], ['back', 'Back', 'backspace, escape'], ['right_thumb', 'Right stick click', 'U']],
   [['dpad_up', 'D-pad up', 'up'], ['dpad_down', 'D-pad down', 'down'], ['dpad_left', 'D-pad left', 'left'], ['dpad_right', 'D-pad right', 'right'],
    ['left_stick_up', 'Left stick up', 'W, numpad8'], ['left_stick_down', 'Left stick down', 'S, numpad2'], ['left_stick_left', 'Left stick left', 'A, numpad4'], ['left_stick_right', 'Left stick right', 'D, numpad6'],
-   ['right_stick_up', 'Right stick up', 'I'], ['right_stick_down', 'Right stick down', 'K'], ['right_stick_left', 'Right stick left', 'J'], ['right_stick_right', 'Right stick right', 'L']]
+   ['right_stick_up', 'Right stick up', 'T'], ['right_stick_down', 'Right stick down', 'G'], ['right_stick_left', 'Right stick left', 'F'], ['right_stick_right', 'Right stick right', 'H']]
 ];
+/* Which turbo keys each control of the file lists: index 0 is the 1-turbo key. */
+const TURBO_CTLS = { left_trigger: [0, 1, 2], right_trigger: [1, 2], left_thumb: [2] };
+const TURBO_DEF = ['lshift', 'space', 'semicolon'];
 const KEY_ROWS = KEY_COLS.flat();
 const K = { players: { 1: {}, 2: {}, 3: {}, 4: {} }, built: false };
-const KEY_WORDS = { enter: 'Enter', backspace: 'Backspace', tab: 'Tab', shift: 'Shift', ctrl: 'Ctrl', space: 'Space', capslock: 'Caps Lock', pause: 'Pause',
+const KEY_WORDS = { escape: 'Esc', enter: 'Enter', backspace: 'Backspace', tab: 'Tab', shift: 'Shift', ctrl: 'Ctrl', space: 'Space', capslock: 'Caps Lock', pause: 'Pause',
   pageup: 'Page Up', pagedown: 'Page Down', end: 'End', home: 'Home', left: 'Left arrow', up: 'Up arrow', right: 'Right arrow', down: 'Down arrow', insert: 'Insert', delete: 'Delete',
   numpadmultiply: 'Keypad *', numpadadd: 'Keypad +', numpadsubtract: 'Keypad -', numpaddecimal: 'Keypad .', numpaddivide: 'Keypad /',
   semicolon: ';', equals: '=', comma: ',', minus: '-', period: '.', slash: '/', grave: '`', leftbracket: '[', backslash: '\\', rightbracket: ']', quote: "'",
@@ -2653,7 +2931,29 @@ function keyLabel(n) { const m = /^numpad(\d)$/.exec(n); return m ? `Keypad ${m[
 /* Shift held on either side also counts as the Shift of that side. */
 const keysOverlap = (a, b) => a === b || ['shift', 'ctrl', 'alt'].some(w => (a === w && (b === 'l' + w || b === 'r' + w)) || (b === w && (a === 'l' + w || a === 'r' + w)));
 const keysPlayer = () => (S.set.pads ? S.set.kbPlayer : 1);
-const keysOf = (ctl, def, p = keysPlayer()) => keyList((K.players[p] || {})[ctl] !== undefined ? K.players[p][ctl] : def);
+const fileKeys = (ctl, def, p) => keyList((K.players[p] || {})[ctl] !== undefined ? K.players[p][ctl] : def);
+/* The three turbo keys, read back from the file's three controls. */
+function turboKeys(p = keysPlayer()) {
+  const lt = fileKeys('left_trigger', TURBO_DEF.join(', '), p), rt = fileKeys('right_trigger', TURBO_DEF.slice(1).join(', '), p);
+  const th = fileKeys('left_thumb', TURBO_DEF[2], p);
+  const t3 = th.find(k => rt.includes(k) && lt.includes(k)) || th[0] || '';
+  const t2 = rt.find(k => k !== t3 && lt.includes(k)) || rt.find(k => k !== t3) || '';
+  const t1 = lt.find(k => k !== t2 && k !== t3) || '';
+  return [t1, t2, t3];
+}
+function setTurbo(p, i, name) {
+  const t = turboKeys(p); t[i] = name;
+  const same = t.every((k, j) => keyCanon(k) === keyCanon(TURBO_DEF[j]));
+  for (const [ctl, idx] of Object.entries(TURBO_CTLS)) {
+    if (same) delete K.players[p][ctl];
+    else K.players[p][ctl] = idx.map(j => t[j]).filter(Boolean).join(', ') || 'none';
+  }
+}
+const keysOf = (ctl, def, p = keysPlayer()) => {
+  const m = /^turbo([123])$/.exec(ctl);
+  if (m) { const k = turboKeys(p)[m[1] - 1]; return k ? [k] : []; }
+  return fileKeys(ctl, def, p);
+};
 function renderKeys() {
   const grid = $('[data-keys-grid]');
   if (!K.built) {
@@ -2694,8 +2994,9 @@ function finishRebind(e) {
   const ctl = capture.dataset.rebind, row = KEY_ROWS.find(r => r[0] === ctl);
   const other = KEY_ROWS.find(([c, , def]) => c !== ctl && keysOf(c, def).some(k => keysOverlap(k, name)));
   if (other) return refuse(`${keyLabel(name)} is already ${other[1]}.`);
-  const p = keysPlayer();
-  if (keyCanon(row[2]) === name && !row[2].includes(',')) delete K.players[p][ctl]; else K.players[p][ctl] = name;
+  const p = keysPlayer(), turbo = /^turbo([123])$/.exec(ctl);
+  if (turbo) setTurbo(p, turbo[1] - 1, name);
+  else if (keyCanon(row[2]) === name && !row[2].includes(',')) delete K.players[p][ctl]; else K.players[p][ctl] = name;
   const b = capture; cancelRebind();
   play($('.keycap', b), spec('cycle').in, 1); tick('select');
   saveKeys();
@@ -2803,7 +3104,7 @@ function followLayout() {
 }
 
 /* ------------------------------------------------------------- navigation */
-const PAGES = ['home', 'settings', 'updates', 'about'];
+const PAGES = ['home', 'settings', 'mods', 'updates', 'about'];
 const TABS = ['display', 'audio', 'controls', 'keyboard', 'game', 'cheats', 'advanced'];
 async function go(page, opts = {}) {
   if (opts.tab) setTab(opts.tab, page !== S.page);
@@ -2813,16 +3114,19 @@ async function go(page, opts = {}) {
   setPadTest(false);
   S.page = page; app.dataset.view = page;
   if (hostBridge) hostBridge.postMessage('view ' + page);
+  if (page === 'mods' && LIVE && !MD.installing && !MD.incoming) send('live:modsget');
+  if (page !== 'mods' && MD.lifted) drop(true);
   $('.subnav').inert = page !== 'settings';
   pulse(dir); followLayout();
+  const navPage = opts.nav || page;
   $$('.nav-item').forEach(n => n.toggleAttribute('aria-current', false));
-  $(`.nav-item[data-goto="${page}"]`).setAttribute('aria-current', 'page');
+  $(`.nav-item[data-goto="${navPage}"]`).setAttribute('aria-current', 'page');
   moveIndicator($('.nav'), $('.nav [aria-current="page"]'));
   renderHints();
   const act = document.activeElement;
   const fromNav = !!act && act.matches('.nav-item, .tab');
   // focus in the menu always sits on the section being shown
-  if (fromNav && (act.matches('.tab') ? page !== 'settings' : act.dataset.goto !== page)) $(`.nav-item[data-goto="${page}"]`).focus({ preventScroll: true });
+  if (fromNav && (act.matches('.tab') ? page !== 'settings' : act.dataset.goto !== navPage)) $(`.nav-item[data-goto="${navPage}"]`).focus({ preventScroll: true });
   holdRing(!fromNav);
   const p = swap(oldEl, newEl, 'page', dir, $$('.page'));
   cascade(newEl);
@@ -3185,7 +3489,6 @@ let sheetReturn = null;
 async function openSheet() {
   if (LIVE) { if (U.latest && !U.active) { fillUpdateSheet(); return showSheet('info'); } if (!U.latest) toast('Up to date', 'ok'); return; }
   if (S.updated) { toast('Up to date', 'ok'); return; }
-  if (S.page !== 'home') await go('home');
   return showSheet('info');
 }
 /* The same sheet holds the update, the backup list and its confirmation, and
@@ -3196,9 +3499,10 @@ async function showSheet(name) {
   if (S.sheetOpen) { sheetState(name); return; }
   sheetReturn = document.activeElement;
   // The sheet opens inside the halo ring, which only sits mid-window on Play;
-  // from another page go there, and come back when it closes.
+  // from another page go there, and come back when it closes. The menu keeps
+  // marking the page the sheet was opened from.
   sheetFrom = null;
-  if (S.page !== 'home') { sheetFrom = { page: S.page, tab: S.page === 'settings' ? S.tab : null }; await go('home'); }
+  if (S.page !== 'home') { sheetFrom = { page: S.page, tab: S.page === 'settings' ? S.tab : null }; await go('home', { nav: S.page }); }
   S.sheetOpen = true; app.dataset.sheet = '1'; renderHints();
   $$('.sheet-state').forEach(s => { s.hidden = s.dataset.sheet !== name; });
   scrim.hidden = false; sheet.hidden = false;
@@ -3607,6 +3911,7 @@ function onExit(o) {
   if (o.kind === 'setup' && L.running && o.code !== 0 && !L.errorShown) onError({ step: 'setup', code: '', text: `Setup ended with exit code ${o.code}.` });
   if (o.kind === 'check' && o.code !== 0 && !L.errorShown) onError({ step: 'checks', code: '', text: `The checks ended with exit code ${o.code}.` });
   if (o.kind === 'verify' && o.code !== 0 && !L.errorShown) onError({ step: 'disc', code: '', text: `Reading the disc ended with exit code ${o.code}.` });
+  if (o.kind === 'modinstall' && MD.installing) installFailed('Install failed.');   // the install ended without its own answer
 }
 function onEngine(o) {
   if (U.active && ['step', 'tool', 'lift', 'log', 'error', 'done', 'xbe', 'check'].includes(o.ev)) { onUpdateEngine(o); return; }
@@ -3648,6 +3953,7 @@ function onEngine(o) {
       if (!o.to) break;
       L.moveTo = o.to; bind('moveTo', o.to); showSheet('move'); break;
     case 'move': onMove(o); break;
+    case 'mods': case 'modinspect': case 'modprogress': case 'modfail': case 'modremoved': case 'modorder': case 'modnote': onModsEvent(o); break;
   }
 }
 
@@ -3832,11 +4138,13 @@ function initLive() {
 }
 /* Saves: open the folder, restore a dated backup (saves\backups\yyyy-mm-dd_hhmmss). */
 function backupLabel(name) {
-  const m = /^(\d{4})-(\d\d)-(\d\d)_(\d\d)(\d\d)(\d\d)(_before-unlock)?$/.exec(name);
+  const m = /^(\d{4})-(\d\d)-(\d\d)_(\d\d)(\d\d)(\d\d)(_before-unlock|_mods-changed)?$/.exec(name);
   if (!m) return name;
   const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
   const when = d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-  return m[7] ? `${when}, before unlock` : when;
+  if (m[7] === '_before-unlock') return `${when}, before unlock`;
+  if (m[7] === '_mods-changed') return `${when}, before mods changed`;
+  return when;
 }
 function onBackups(o) {
   const list = (o.list || []);
@@ -3851,6 +4159,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-copylog]')) { send('live:copylog'); return; }
   if (e.target.closest('[data-open-saves]')) { send('live:opensaves'); return; }
   if (e.target.closest('[data-open-shots]')) { send('live:openshots'); return; }
+  if (e.target.closest('[data-open-dump]')) { send('live:opendump'); return; }
   if (e.target.closest('[data-restore]')) { send('live:backups'); return; }
   const bk = e.target.closest('[data-backup]');
   if (bk) { L.restoreName = bk.dataset.backup; bind('restoreTitle', 'Restore the save from ' + backupLabel(L.restoreName)); sheetState('confirm'); return; }
@@ -3867,6 +4176,560 @@ document.addEventListener('click', e => {
   }
   if (e.target.closest('[data-unlock-go]')) { L.unlockOnce = true; closeSheet().then(() => openLaunch()); return; }
 });
+
+/* ===================================================================== MODS
+   The mods on this PC, as plates on a beam of light. Load order runs top to
+   bottom and the first mod on the beam wins a clash (the game's own rule,
+   port/src/gb_mods.c). The page writes only through the host: the order and
+   on/off as mods\load_order.txt, installs and removals, and the "mods"
+   setting, which becomes GB_MODS=0 when off. This file is joined into
+   core.js by build.py and shares its scope. */
+const MD = { quiet: false, list: [], sel: null, lifted: null, liftFrom: -1, incoming: null, installing: false, loaded: false, drag: null, gameFiles: true };
+const MOD_C = 2 * Math.PI * 46;           // the lens ring's circumference (r = 46 in a 100 box)
+const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
+
+/* A mod with no icon.png gets a sigil from its name: two leaning bars (the
+   mark's break) on a colour of its own, with its initials. */
+function hashStr(s) { let h = 2166136261; for (const c of String(s)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+function modInitials(name) {
+  const w = String(name).replace(/[_\-.]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+  return ((w[0] || '?')[0] + (w.length > 1 ? w[1][0] : (w[0] || '')[1] || '')).toUpperCase();
+}
+function sigil(name) {
+  const h = hashStr(name), a = h % 360, b = (a + 35 + (h >>> 9) % 70) % 360;
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='hsl(${a},62%,42%)'/><stop offset='1' stop-color='hsl(${b},58%,22%)'/></linearGradient></defs>` +
+    `<rect width='64' height='64' fill='url(#g)'/><path d='M4 20a6 6 0 0 1 6-6h14L4 40z' fill='rgba(255,255,255,.16)'/><path d='M60 44a6 6 0 0 1-6 6H40l20-26z' fill='rgba(255,255,255,.16)'/>` +
+    `<text x='32' y='40' text-anchor='middle' font-family='Segoe UI,sans-serif' font-weight='700' font-size='20' fill='#fff' fill-opacity='.92'>${esc(modInitials(name))}</text></svg>`;
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+}
+const modIcon = m => m.icon || sigil(m.name || m.folder);
+
+/* Which files each mod really gives the game: walking the beam from the top,
+   the first mod with a file keeps it. Mods that are off take part in nothing.
+   Two files clash when they reach the same thing in the game: the host gives
+   each file a key (the disc path; an archive entry by its number, whether the
+   mod named it by name or number; a line of text by its entry and line). */
+const fileKey = (m, i) => (m.keys && m.keys[i]) || m.files[i].toLowerCase();
+function computeClashes() {
+  const owner = new Map();
+  for (const m of MD.list) { m.lost = []; m.lostTo = {}; m.lostFrom = {}; }
+  for (const m of MD.list) {
+    if (!m.on) continue;
+    const miss = new Set((m.missing || []).map(f => f.toLowerCase()));
+    const take = (f, k) => {
+      if (miss.has(f.toLowerCase())) return;                 // an entry the archive lacks reaches nothing
+      const w = owner.get(k);
+      if (!w) { owner.set(k, m); return; }
+      m.lost.push(f); m.lostFrom[f.toLowerCase()] = w.name;
+      // Two pictures of one mod with one fingerprint: the first in folder order is used; no arc to itself.
+      if (w !== m) m.lostTo[w.folder] = (m.lostTo[w.folder] || 0) + 1;
+    };
+    m.files.forEach((f, i) => take(f, fileKey(m, i)));
+    // Pictures clash on their fingerprint, whatever their labels.
+    (m.textures || []).forEach((f, i) => take(f, (m.textureKeys && m.textureKeys[i]) || 'tex:' + f.toLowerCase()));
+  }
+}
+const modBy = f => MD.list.find(m => m.folder === f);
+
+/* ------------------------------------------------------------ rendering */
+const stackEl = $('.stack'), lensEl = $('.lens'), modsPage = $('.page-mods'), arcsEl = $('.clash-arcs');
+function plateHtml(m, i) {
+  const meta = [m.version ? `<span>${esc(m.version)}</span>` : '', m.author ? `<span>${esc(m.author)}</span>` : '',
+    `<span class="plate-size">${plural(m.files.length, 'file')}${m.textures && m.textures.length ? ', ' + plural(m.textures.length, 'picture') : ''}${m.size ? ', ' + sizeText(m.size) : ''}</span>`].join('');
+  const lost = m.on && m.lost && m.lost.length, miss = m.missing ? m.missing.length : 0;
+  const side = [miss ? `<span class="plate-warn">${miss} not found</span>` : '',
+    lost ? `<span class="plate-clash">${lost === m.files.length + (m.textures || []).length ? 'All overridden' : lost + ' overridden'}</span>` : '',
+    m.bad ? `<span class="plate-warn">${esc(m.bad)}</span>` : ''].join('');
+  return `<li class="plate" data-focus tabindex="0" data-folder="${esc(m.folder)}" data-on="${m.on ? 1 : 0}"${i === 0 ? ' data-autofocus' : ''}
+    aria-label="${esc(m.name)}, ${m.on ? 'on' : 'off'}, place ${i + 1}">
+    <span class="plate-contact" data-mod-toggle title="On or off"></span>
+    <span class="plate-index">${String(i + 1).padStart(2, '0')}</span>
+    <img class="plate-icon" alt="" src="${modIcon(m)}">
+    <span class="plate-text"><span class="plate-name">${esc(m.name)}</span><span class="plate-meta">${meta}</span></span>
+    <span class="plate-side">${side}</span>
+    <span class="plate-fill"></span>
+  </li>`;
+}
+function incomingHtml(o) {
+  return `<li class="plate incoming${o.ok ? '' : ' refused'}" data-focus tabindex="0" data-incoming data-on="1">
+    <span class="plate-contact"></span>
+    <span class="plate-index">${o.ok ? 'new' : ''}</span>
+    <img class="plate-icon" alt="" src="${o.ok ? modIcon(o) : sigil(o.zip || 'zip')}">
+    <span class="plate-text"><span class="plate-name">${esc(o.ok ? o.name : o.zip || 'This file')}</span><span class="plate-meta">${o.ok ? [o.version, o.author].filter(Boolean).map(t => `<span>${esc(t)}</span>`).join('') : '<span>Not installed</span>'}</span></span>
+    <span class="plate-fill"></span>
+  </li>`;
+}
+function renderMods(opts = {}) {
+  computeClashes();
+  const keep = document.activeElement && document.activeElement.closest && document.activeElement.closest('.plate');
+  const keepFolder = keep ? keep.dataset.folder : null;
+  const first = opts.flip ? flipFirst() : null;
+  stackEl.innerHTML = MD.list.map(plateHtml).join('') + (MD.incoming ? incomingHtml(MD.incoming) : '');
+  const on = MD.list.filter(m => m.on).length;
+  modsPage.dataset.count = String(MD.list.length);
+  modsPage.dataset.master = S.set.mods ? 'on' : 'off';
+  bind('modsCount', !MD.list.length ? '' : !S.set.mods ? 'All off' : `${on} of ${MD.list.length} on`);
+  bind('modsNav', S.set.mods && on ? String(on) : '');
+  const slot = $('.slot', modsPage);
+  slot.hidden = MD.list.length > 0 && !MD.incoming && app.dataset.drop !== '1' ? true : !!MD.incoming;
+  bind('slotTitle', MD.list.length ? 'Drop to install' : 'No mods');
+  bind('slotText', MD.list.length ? '' : 'Drop a .zip here');
+  if (first) flipLast(first);
+  requestAnimationFrame(drawArcs);
+  MD.quiet = true;                 // putting focus back is not a new selection
+  if (keepFolder) { const el = plateEl(keepFolder); if (el) { el.focus({ preventScroll: true }); placeRing(el, true); } }
+  else if (keep && keep.matches('[data-incoming]')) { const el = $('[data-incoming]', stackEl); if (el) el.focus({ preventScroll: true }); }
+  MD.quiet = false;
+  if (!MD.incoming && MD.sel && !modBy(MD.sel)) MD.sel = MD.list.length ? MD.list[0].folder : null;
+  if (!MD.sel && MD.list.length && !MD.incoming) MD.sel = MD.list[0].folder;
+  renderLens();
+}
+const plateEl = f => $$('.plate', stackEl).find(p => p.dataset.folder === f);
+/* plates glide to their new places (first, last, invert, play) */
+function flipFirst() { const r = {}; $$('.plate[data-folder]', stackEl).forEach(p => { r[p.dataset.folder] = p.getBoundingClientRect().top; }); return r; }
+function flipLast(first) {
+  $$('.plate[data-folder]', stackEl).forEach(p => {
+    const was = first[p.dataset.folder]; if (was === undefined) return;
+    const d = was - p.getBoundingClientRect().top; if (Math.abs(d) < 1) return;
+    p.animate([{ translate: `0 ${d}px` }, { translate: '0 0' }], { duration: 260, easing: 'cubic-bezier(.2, .9, .25, 1)' });
+  });
+}
+/* Clash arcs: from the plate that keeps a file round the beam to the one that loses it. */
+function drawArcs() {
+  const wrap = $('.stack-wrap', modsPage);
+  arcsEl.setAttribute('height', String(wrap.scrollHeight));
+  const rem = remPx(), beamX = 1.1 * rem, out = .1 * rem;
+  const y = el => el.offsetTop + stackEl.offsetTop + el.offsetHeight / 2;
+  let html = '';
+  for (const m of MD.list) {
+    if (!m.on) continue;
+    for (const [wf, n] of Object.entries(m.lostTo)) {
+      const a = plateEl(wf), b = plateEl(m.folder); if (!a || !b) continue;
+      const y1 = y(a), y2 = y(b), bulge = Math.min(beamX - out, 6 + (y2 - y1) * .08);
+      html += `<path d="M${beamX} ${y1} C${beamX - bulge * 1.6} ${y1}, ${beamX - bulge * 1.6} ${y2}, ${beamX} ${y2}"/>` +
+        `<circle cx="${beamX}" cy="${y1}" r="2.2"/><circle cx="${beamX}" cy="${y2}" r="2.2"/>` +
+        `<text x="${beamX - bulge * 1.35 - 2}" y="${(y1 + y2) / 2 + 3}" text-anchor="end">${n}</text>`;
+    }
+  }
+  arcsEl.innerHTML = html;
+}
+/* Markdown, read safely: everything is escaped; headings, lists and paragraphs keep their shape. */
+function readmeHtml(text) {
+  const out = []; let list = false, para = [];
+  const flush = () => { if (para.length) { out.push(`<p>${para.join(' ')}</p>`); para = []; } };
+  const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<span class="mono">$1</span>').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1');
+  for (const raw of String(text).split(/\r?\n/).slice(0, 400)) {
+    const l = raw.trimEnd();
+    if (/^\s*([-*+]|\d+\.)\s+/.test(l)) { flush(); if (!list) { out.push('<ul>'); list = true; } out.push(`<li>${inline(l.replace(/^\s*([-*+]|\d+\.)\s+/, ''))}</li>`); continue; }
+    if (list) { out.push('</ul>'); list = false; }
+    if (/^#{1,6}\s/.test(l)) { flush(); out.push(`<h4>${inline(l.replace(/^#+\s*/, ''))}</h4>`); continue; }
+    if (!l.trim() || /^(-{3,}|={3,}|<!--)/.test(l.trim())) { flush(); continue; }
+    if (/^\s*<[^>]+>\s*$/.test(l)) continue;      // bare HTML tags (images, centring) carry nothing readable
+    para.push(inline(l.trim()));
+  }
+  flush(); if (list) out.push('</ul>');
+  return out.join('');
+}
+function ringHtml(m, used, lost) {
+  const u = used * MOD_C, l = lost * MOD_C;
+  return `<div class="lens-ring"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="r-track" cx="50" cy="50" r="46"/>` +
+    `<circle class="r-used" cx="50" cy="50" r="46" stroke-dasharray="${u} ${MOD_C}"/>` +
+    `<circle class="r-lost" cx="50" cy="50" r="46" stroke-dasharray="${l} ${MOD_C}" stroke-dashoffset="${-u}"/></svg>` +
+    `<img alt="" src="${modIcon(m)}"></div>`;
+}
+function renderLens() {
+  if (MD.incoming) return renderIncomingLens();
+  const m = MD.sel && modBy(MD.sel);
+  lensEl.hidden = !m;
+  if (!m) { lensEl.innerHTML = ''; return; }
+  const idx = MD.list.indexOf(m), n = m.files.length + (m.textures || []).length, lost = m.on ? m.lost.length : 0;
+  const used = n ? Math.max(0, n - lost - (m.on ? (m.missing || []).length : 0)) / n : 0;   // entries the game did not find reach it no more than lost ones
+  const lostSet = new Set(m.lost.map(f => f.toLowerCase())), missSet = new Set((m.missing || []).map(f => f.toLowerCase()));
+  const why = new Map((m.refused || []).map(r => [String(r.file).toLowerCase(), r.why]));
+  const fileRows = m.files.slice(0, 300).map((f, i) => {
+    const lf = f.toLowerCase(), note = m.notes && m.notes[i] ? ` <span class="f-note">${esc(m.notes[i])}</span>` : '';
+    if (missSet.has(lf)) return `<span class="f-unused" title="Not read by the game">${esc(f)} <span class="f-note">not in the archive</span></span>`;
+    if (why.has(lf)) return `<span class="f-unused" title="${esc(why.get(lf))}">${esc(f)} <span class="f-note">not used</span></span>`;
+    if (!lostSet.has(lf)) return `<span>${esc(f)}${note}</span>`;
+    return `<span class="f-lost">${esc(f)}${note} <span class="f-note">from ${esc(m.lostFrom[lf] || '')}</span></span>`;
+  }).join('') + (m.files.length > 300 ? `<span class="f-note">and ${m.files.length - 300} more</span>` : '') +
+    (m.textures || []).slice(0, 300).map(f => {
+      const lf = f.toLowerCase();
+      if (why.has(lf)) return `<span class="f-unused" title="${esc(why.get(lf))}">${esc(f)} <span class="f-note">not used</span></span>`;
+      if (lostSet.has(lf)) return `<span class="f-lost">${esc(f)} <span class="f-note">picture</span> <span class="f-note">from ${esc(m.lostFrom[lf] || '')}</span></span>`;
+      return `<span>${esc(f)} <span class="f-note">picture</span></span>`;
+    }).join('') +
+    (m.unused || []).slice(0, 40).map(f => `<span class="f-unused" title="Not read by the game">${esc(f)}</span>`).join('');
+  lensEl.dataset.on = m.on && S.set.mods ? '1' : '0';
+  lensEl.innerHTML = `
+    <div class="lens-top">${ringHtml(m, used, m.on ? lost / (n || 1) : 0)}
+      <div><div class="lens-name">${esc(m.name)}</div>
+        <div class="lens-meta">${[m.version, m.author].filter(Boolean).map(esc).join(', ')}</div></div></div>
+    <div class="lens-actions">
+      <button class="btn btn-small" data-mod-toggle-btn>${m.on ? 'Turn off' : 'Turn on'}</button>
+      <button class="btn btn-small btn-quiet" data-mod-open>Open folder</button>
+      <button class="btn btn-small btn-quiet btn-danger" data-mod-remove>Remove</button>
+    </div>
+    ${m.desc ? `<p class="lens-desc">${esc(m.desc)}</p>` : ''}
+    <div class="lens-sec"><div class="lens-h">Files</div><div class="files">${fileRows}</div></div>
+    ${m.readme ? `<div class="lens-sec"><div class="lens-h">Readme</div><div class="readme">${readmeHtml(m.readme)}</div></div>` : ''}`;
+}
+function renderIncomingLens() {
+  const o = MD.incoming; lensEl.hidden = false; lensEl.dataset.on = '1';
+  if (!o.ok) {
+    lensEl.innerHTML = `<div class="lens-refusal"><div class="lens-name">${esc(o.reason)}</div></div>
+      <div class="lens-actions"><button class="btn btn-small btn-primary" data-mod-dismiss data-autofocus>Close</button></div>`;
+    return;
+  }
+  const rep = o.replaces && modBy(o.replaces.folder);
+  lensEl.innerHTML = `
+    <div class="lens-top">${ringHtml(o, MD.installing ? (o.p || 0) / 100 : 0, 0)}
+      <div><div class="lens-name">${esc(o.name)}</div>
+        <div class="lens-meta">${[o.version, o.author].filter(Boolean).map(esc).join(', ')}</div>
+        ${rep && rep.version ? `<div class="lens-state">Installed: ${esc(rep.version)}</div>` : ''}</div></div>
+    <div class="lens-actions">
+      <button class="btn btn-small btn-primary" data-mod-install-go data-autofocus ${MD.installing ? 'disabled' : ''}>${MD.installing ? 'Installing' : rep ? 'Replace' : 'Install'}</button>
+      <button class="btn btn-small btn-quiet" data-mod-dismiss ${MD.installing ? 'disabled' : ''}>Cancel</button>
+    </div>
+    ${o.desc ? `<p class="lens-desc">${esc(o.desc)}</p>` : ''}
+    <div class="lens-sec"><div class="lens-h">${plural(o.files.length, 'file')}${o.textures && o.textures.length ? ', ' + plural(o.textures.length, 'picture') : ''}, ${sizeText(o.size || 0)}</div>
+      <div class="files">${o.files.slice(0, 300).map((f, i) => (o.missing || []).includes(f)
+        ? `<span class="f-unused" title="Not read by the game">${esc(f)} <span class="f-note">not in the archive</span></span>`
+        : `<span>${esc(f)}${o.notes && o.notes[i] ? ` <span class="f-note">${esc(o.notes[i])}</span>` : ''}</span>`).join('')}${(o.textures || []).slice(0, 300).map(f => `<span>${esc(f)} <span class="f-note">picture</span></span>`).join('')}${(o.unused || []).slice(0, 40).map(f => `<span class="f-unused" title="Not read by the game">${esc(f)}</span>`).join('')}</div></div>
+    ${o.readme ? `<div class="lens-sec"><div class="lens-h">Readme</div><div class="readme">${readmeHtml(o.readme)}</div></div>` : ''}`;
+}
+
+/* ------------------------------------------------------------- actions */
+function saveOrder() {
+  if (LIVE) send('live:modsorder:' + JSON.stringify(MD.list.map(m => ({ folder: m.folder, on: !!m.on }))));
+}
+function toggleMod(folder) {
+  const m = modBy(folder); if (!m || MD.lifted) return;
+  m.on = !m.on; MD.sel = folder;
+  renderMods(); saveOrder();
+  const el = plateEl(folder);
+  if (el && m.on) { el.classList.add('lit'); setTimeout(() => el.classList.remove('lit'), 1100); }
+  tick('select');
+}
+function moveMod(folder, d) {
+  const i = MD.list.findIndex(m => m.folder === folder), j = i + d;
+  if (i < 0 || j < 0 || j >= MD.list.length) { const el = plateEl(folder); if (el) nudge(el, 0, d); return false; }
+  const [m] = MD.list.splice(i, 1); MD.list.splice(j, 0, m);
+  renderMods({ flip: true });
+  const el = plateEl(folder); if (el) { if (MD.lifted === folder) el.classList.add('lifted'); focusEl(el); }
+  tick('move');
+  return true;
+}
+function lift(folder) {
+  MD.lifted = folder; MD.liftFrom = MD.list.findIndex(m => m.folder === folder);
+  const el = plateEl(folder); if (el) el.classList.add('lifted');
+  renderHints(); tick('select');
+}
+function drop(cancel) {
+  const f = MD.lifted; if (!f) return;
+  MD.lifted = null;
+  if (cancel) { const i = MD.list.findIndex(m => m.folder === f); if (i !== MD.liftFrom) { const [m] = MD.list.splice(i, 1); MD.list.splice(MD.liftFrom, 0, m); } renderMods({ flip: true }); }
+  else { const el = plateEl(f); if (el) el.classList.remove('lifted'); if (MD.list.findIndex(m => m.folder === f) !== MD.liftFrom) saveOrder(); renderMods(); }
+  const el = plateEl(f); if (el) focusEl(el);
+  renderHints(); tick(cancel ? 'back' : 'select');
+}
+function askRemove(folder) {
+  const m = modBy(folder); if (!m) return;
+  MD.removing = folder; bind('modRemoveTitle', `Remove ${m.name}?`); showSheet('modremove');
+}
+function removed(folder) {
+  const el = plateEl(folder), i = MD.list.findIndex(m => m.folder === folder);
+  const finish = () => {
+    if (i >= 0) MD.list.splice(i, 1);
+    if (MD.sel === folder) MD.sel = MD.list.length ? MD.list[Math.min(i, MD.list.length - 1)].folder : null;
+    renderMods({ flip: true });
+    const next = MD.sel && plateEl(MD.sel); focusEl(next || $('[data-mods-install]'));
+  };
+  if (!el) return finish();
+  el.animate([{ opacity: 1, transform: getComputedStyle(el).transform }, { opacity: 0, transform: 'translateX(3rem)' }], { duration: 320, easing: 'cubic-bezier(.2,0,0,1)', fill: 'forwards' }).finished.then(finish);
+}
+function installPick() {
+  if (MD.installing) return;
+  if (LIVE) { send('live:modspick'); return; }
+  mockInspect();
+}
+function showIncoming(o) {
+  MD.incoming = o; MD.installing = false;
+  if (S.page !== 'mods') go('mods');
+  renderMods();
+  halo(o.ok ? 'idle' : 'error');
+  const target = $('[data-mod-install-go]', lensEl) || $('[data-mod-dismiss]', lensEl);
+  setTimeout(() => focusEl(target), 60);
+  const pl = $('[data-incoming]', stackEl); if (pl) pl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+function dismissIncoming() {
+  if (MD.installing) return;
+  MD.incoming = null; halo('idle'); renderMods();
+  if (LIVE) send('live:modsforget');
+  const el = MD.sel && plateEl(MD.sel); focusEl(el || $('[data-mods-install]'));
+}
+function installGo() {
+  const o = MD.incoming; if (!o || !o.ok || MD.installing) return;
+  MD.installing = true; o.p = 0; renderLens(); halo('work', 0);
+  if (LIVE) send('live:modsinstall:' + o.token); else mockInstall(o);
+}
+function installProgress(p) {
+  const o = MD.incoming; if (!o) return;
+  o.p = clamp(p, 0, 100);
+  const pl = $('[data-incoming]', stackEl); if (pl) pl.style.setProperty('--p', o.p.toFixed(1));
+  halo('work', o.p);
+  const used = $('.r-used', lensEl); if (used) used.setAttribute('stroke-dasharray', `${o.p / 100 * MOD_C} ${MOD_C}`);
+}
+function installed(list, folder) {
+  MD.installing = false; MD.incoming = null; MD.sel = folder;
+  if (list) MD.list = list;
+  renderMods(); halo('ok', 100); setTimeout(() => { if (!MD.incoming && !S.busy) halo('idle'); }, 800);
+  const el = plateEl(folder);
+  if (el) { el.classList.add('lit'); setTimeout(() => el.classList.remove('lit'), 1100); focusEl(el); }
+  tick('select');
+}
+function installFailed(reason) {
+  const o = MD.incoming; MD.installing = false;
+  MD.incoming = { ok: false, zip: o ? o.zip : '', reason };
+  renderMods(); halo('error');
+  setTimeout(() => focusEl($('[data-mod-dismiss]', lensEl)), 60);
+}
+function modsMaster() { renderMods(); }
+
+/* ------------------------------------------------------------- input */
+document.addEventListener('focusin', e => {
+  const p = e.target.closest && e.target.closest('.plate[data-folder]');
+  if (p && !MD.quiet && !MD.incoming && MD.sel !== p.dataset.folder) { MD.sel = p.dataset.folder; renderLens(); }
+});
+document.addEventListener('click', e => {
+  if (e.target.closest('[data-mods-install]')) { installPick(); return; }
+  if (e.target.closest('[data-mods-folder]')) { if (LIVE) send('live:modsopen'); else toast('Mockup: the mods folder would open here.'); return; }
+  if (e.target.closest('[data-mod-install-go]')) { installGo(); return; }
+  if (e.target.closest('[data-mod-dismiss]')) { dismissIncoming(); return; }
+  if (e.target.closest('[data-mod-toggle-btn]')) { if (MD.sel) toggleMod(MD.sel); return; }
+  if (e.target.closest('[data-mod-open]')) { if (LIVE) send('live:modsopen:' + MD.sel); else toast('Mockup: the mod’s folder would open here.'); return; }
+  if (e.target.closest('[data-mod-remove]')) { if (MD.sel) askRemove(MD.sel); return; }
+  if (e.target.closest('[data-mod-remove-go]')) {
+    const f = MD.removing; closeSheet();
+    if (!f) return;
+    if (LIVE) send('live:modsremove:' + f); else removed(f);
+    return;
+  }
+  const plate = e.target.closest('.plate[data-folder]');
+  if (!plate || MD.drag && MD.drag.moved) return;
+  if (MD.lifted) { drop(false); return; }
+  // Enter, Space and the controller's A arrive as a click with no pointer (detail 0): on or off.
+  // With the mouse, the contact on the beam switches it, and a click elsewhere selects it.
+  if (e.detail === 0 || e.target.closest('[data-mod-toggle]')) toggleMod(plate.dataset.folder);
+});
+document.addEventListener('dblclick', e => { const p = e.target.closest('.plate[data-folder]'); if (p && !e.target.closest('[data-mod-toggle]')) toggleMod(p.dataset.folder); });
+
+/* Keys on the page: Alt+Up/Down move a mod, Delete removes it. A lifted
+   plate (controller X) follows Up/Down until A, X or B. */
+function modsKey(e) {
+  if (S.page !== 'mods' || S.mode !== 'main' || S.sheetOpen || S.launchOpen || S.mockOpen) return false;
+  const p = document.activeElement && document.activeElement.closest && document.activeElement.closest('.plate[data-folder]');
+  if (MD.lifted) {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); setInput('keyboard'); moveMod(MD.lifted, e.key === 'ArrowUp' ? -1 : 1); return true; }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drop(false); return true; }
+    if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); drop(true); return true; }
+    return false;
+  }
+  if (!p) return false;
+  if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    e.preventDefault(); setInput('keyboard');
+    if (moveMod(p.dataset.folder, e.key === 'ArrowUp' ? -1 : 1)) saveOrder();
+    return true;
+  }
+  if (e.key === 'Delete') { e.preventDefault(); setInput('keyboard'); askRemove(p.dataset.folder); return true; }
+  return false;
+}
+function modsPad(btn) {
+  if (S.page !== 'mods' || S.mode !== 'main' || S.sheetOpen || S.launchOpen || S.mockOpen) return;
+  setInput('gamepad');
+  const p = document.activeElement && document.activeElement.closest && document.activeElement.closest('.plate[data-folder]');
+  if (btn === 'x') { if (MD.lifted) drop(false); else if (p) lift(p.dataset.folder); }
+  if (btn === 'y' && p && !MD.lifted) askRemove(p.dataset.folder);
+}
+function modsDpad(dy) { if (!MD.lifted || !dy) return false; moveMod(MD.lifted, dy); return true; }
+function modsBack() {
+  if (S.page !== 'mods' || S.sheetOpen) return false;
+  if (MD.lifted) { drop(true); return true; }
+  if (MD.incoming && !MD.installing) { dismissIncoming(); return true; }
+  return false;
+}
+
+/* Dragging a plate with the mouse: the others make way as it passes their middles. */
+stackEl.addEventListener('pointerdown', e => {
+  const p = e.target.closest('.plate[data-folder]');
+  if (!p || e.button !== 0 || e.target.closest('[data-mod-toggle]') || MD.lifted || MD.incoming) return;
+  const plates = $$('.plate[data-folder]', stackEl);
+  MD.drag = { el: p, folder: p.dataset.folder, y0: e.clientY, moved: false, from: plates.indexOf(p), to: plates.indexOf(p),
+    mids: plates.map(q => { const r = q.getBoundingClientRect(); return r.top + r.height / 2; }), step: plates.length > 1 ? plates[1].getBoundingClientRect().top - plates[0].getBoundingClientRect().top : 0, plates };
+});
+addEventListener('pointermove', e => {
+  const d = MD.drag; if (!d) return;
+  const dy = e.clientY - d.y0;
+  if (!d.moved && Math.abs(dy) < 6) return;
+  if (!d.moved) { d.moved = true; d.el.setPointerCapture && d.el.setPointerCapture(e.pointerId); d.el.classList.add('dragging', 'lifted'); stackEl.classList.add('reordering'); }
+  const y = d.mids[d.from] + dy;
+  let to = d.mids.findIndex(m => y < m); if (to < 0) to = d.mids.length - 1;
+  if (to > d.from && y < d.mids[to]) to = Math.max(d.from, to - 1);
+  d.to = clamp(to, 0, d.plates.length - 1);
+  d.el.style.translate = `0 ${dy}px`;
+  d.plates.forEach((q, i) => {
+    if (q === d.el) return;
+    const s = (d.from < d.to && i > d.from && i <= d.to) ? -d.step : (d.from > d.to && i >= d.to && i < d.from) ? d.step : 0;
+    q.style.translate = s ? `0 ${s}px` : '';
+  });
+});
+addEventListener('pointerup', () => {
+  const d = MD.drag; if (!d) return;
+  MD.drag = d.moved ? Object.assign(d, { done: true }) : null;
+  if (!d.moved) return;
+  setTimeout(() => { MD.drag = null; }, 0);   // the click that follows a drag is not a selection
+  const r = d.el.getBoundingClientRect().top;
+  stackEl.classList.remove('reordering');
+  d.plates.forEach(q => { q.style.translate = ''; });
+  d.el.classList.remove('dragging', 'lifted');
+  if (d.to !== d.from) { const [m] = MD.list.splice(d.from, 1); MD.list.splice(d.to, 0, m); saveOrder(); }
+  MD.sel = d.folder; renderMods();
+  const el = plateEl(d.folder);
+  if (el) { const delta = r - el.getBoundingClientRect().top; el.animate([{ translate: `0 ${delta}px` }, { translate: '0 0' }], { duration: 220, easing: 'cubic-bezier(.2,.9,.25,1)' }); focusEl(el); }
+  tick('select');
+});
+
+/* A .zip dropped anywhere on the window: shown on the Mods page first. */
+let dragDepth = 0;
+const hasFiles = e => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+addEventListener('dragenter', e => {
+  if (!hasFiles(e)) return; e.preventDefault();
+  if (S.mode !== 'main' || S.sheetOpen || S.launchOpen || MD.installing) return;
+  if (dragDepth++ === 0) { app.dataset.drop = '1'; if (S.page !== 'mods') go('mods'); renderMods(); }
+});
+addEventListener('dragover', e => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = S.mode === 'main' && !MD.installing ? 'copy' : 'none'; });
+addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; delete app.dataset.drop; renderMods(); } });
+addEventListener('drop', e => {
+  e.preventDefault();             // never let the window open the file
+  dragDepth = 0; delete app.dataset.drop;
+  if (S.mode !== 'main' || S.sheetOpen || S.launchOpen || MD.installing) { renderMods(); return; }
+  const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+  if (!files.length) { renderMods(); return; }
+  if (files.length > 1) toast('One file at a time', 'info');
+  const f = files[0];
+  if (LIVE && hostBridge && hostBridge.postMessageWithAdditionalObjects) { hostBridge.postMessageWithAdditionalObjects('live:modsdrop', [f]); renderMods(); return; }
+  if (LIVE) { showIncoming({ ok: false, zip: f.name, reason: 'Dropping does not work here. Use Install from file.' }); return; }
+  mockInspect(f.name);
+});
+
+/* ------------------------------------------------------------- host */
+function onModsEvent(o) {
+  switch (o.ev) {
+    case 'mods':
+      MD.loaded = true; MD.gameFiles = o.gameFiles !== false;
+      MD.list = (o.list || []).map(normMod);
+      if (o.error) toast(o.error, 'info');
+      if (o.folder && MD.installing) installed(MD.list, o.folder); else renderMods();
+      break;
+    case 'modinspect':
+      if (o.cancelled) break;
+      showIncoming(o.ok ? normMod(Object.assign({ on: true }, o)) : { ok: false, zip: o.zip, reason: o.reason });
+      break;
+    case 'modprogress': installProgress(o.p); break;
+    case 'modfail': installFailed(o.reason); break;
+    case 'modremoved': if (o.ok) removed(o.folder); else toast(o.reason, 'info'); break;
+    case 'modorder': if (!o.ok) toast(o.reason, 'info'); break;
+    case 'modnote': toast(o.text, 'info'); break;
+  }
+}
+function normMod(o) {
+  const m = Object.assign({ files: [], unused: [], missing: [], on: true }, o);
+  for (const k of ['files', 'keys', 'notes', 'unused', 'missing', 'textures', 'textureKeys', 'refused']) m[k] = Array.from(m[k] || []);
+  m.name = m.name || m.folder; return m;
+}
+
+/* ------------------------------------------------------------- mockup */
+/* Sample mods for the design: names, versions and paths are made up for the
+   page; the paths follow the disc's folders. Pictures are drawn here. */
+function mockArt(kind, h1, h2) {
+  const bg = `<rect width='64' height='64' fill='hsl(${h1},45%,14%)'/>`;
+  const shapes = {
+    rings: `<circle cx='38' cy='30' r='18' fill='none' stroke='hsl(${h2},80%,62%)' stroke-width='3'/><circle cx='38' cy='30' r='10' fill='none' stroke='hsl(${h1},80%,62%)' stroke-width='3' opacity='.7'/><path d='M0 52l64-14v26H0z' fill='hsl(${h2},60%,30%)'/>`,
+    bars: [0, 1, 2, 3, 4].map(i => `<rect x='${8 + i * 10}' y='${44 - i * 6}' width='6' height='${12 + i * 6}' fill='hsl(${h2 + i * 8},75%,${50 + i * 4}%)'/>`).join(''),
+    sun: `<circle cx='32' cy='40' r='16' fill='hsl(${h2},90%,58%)'/><path d='M0 44h64v20H0z' fill='hsl(${h1},50%,10%)'/>` + [0, 1, 2].map(i => `<path d='M0 ${48 + i * 5}h64' stroke='hsl(${h2},80%,55%)' stroke-width='1.5' opacity='${.7 - i * .2}'/>`).join(''),
+    grid: [0, 1, 2, 3].map(i => `<path d='M${i * 18 - 6} 64L${i * 18 + 14} 30' stroke='hsl(${h2},70%,60%)' stroke-width='1.6'/>`).join('') + `<path d='M0 46h64M0 56h64' stroke='hsl(${h2},70%,60%)' stroke-width='1.2' opacity='.6'/><text x='10' y='24' font-family='Segoe UI' font-weight='800' font-size='15' fill='hsl(${h2},90%,70%)'>21</text>`
+  };
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>${bg}${shapes[kind]}</svg>`);
+}
+const MOCK_MODS = () => [
+  { folder: 'nightowl-Midnight_HUD', name: 'Midnight HUD', version: '1.2.0', author: 'nightowl', on: true, size: 1460000, manifest: true,
+    desc: 'The match HUD in deep blue with sharper digits.', icon: mockArt('rings', 230, 195),
+    files: ['fe/HUD.XSH', 'fe/OFFIND.xsh', 'fe/HUDFONT.xsh'],
+    readme: '# Midnight HUD\nA darker match HUD.\n\n## Changes\n- Score panel in deep blue\n- Sharper digits on the shot clock\n- The player marker matches\n\nMade from my own disc dump.' },
+  { folder: 'courtside-Retro_Scoreboard', name: 'Retro Scoreboard', version: '2.0.1', author: 'courtside', on: true, size: 820000, manifest: true,
+    desc: 'An old arena scoreboard look for the score and clock.', icon: mockArt('bars', 20, 35),
+    files: ['fe/HUD.XSH', 'fe/SCORE.xsh'], readme: 'Retro Scoreboard\n\nPut it below other HUD mods if you only want the clock.' },
+  { folder: 'oldschool-Classic_Rosters', name: 'Classic Rosters', version: '1.0.0', author: 'oldschool', on: true, size: 5120000, manifest: true,
+    desc: 'Rosters and ratings edited by hand.', icon: mockArt('grid', 280, 300),
+    files: ['database/xdbplyr.adf', 'database/xdbteam.adf', 'xf/xf000002/417.xsh'], missing: ['xf/xf000002/417.xsh'] },
+  { folder: 'skyline-Sunset_Rooftop', name: 'Sunset Rooftop', version: '0.9.2', author: 'skyline', on: false, size: 38400000, manifest: true,
+    desc: 'The rooftop court at sunset.', icon: mockArt('sun', 260, 28), files: ['xf/court07.viv'], unused: ['preview/sunset.jpg'] },
+  { folder: 'my_ball_texture', name: 'my_ball_texture', version: '', author: '', on: true, size: 65536, manifest: false, files: ['fe/BALL.xsh'] }
+];
+const MOCK_ZIPS = [
+  () => ({ ok: true, token: 'm1', zip: 'neonline-Street_Lights-1.1.0.zip', folder: 'neonline-Street_Lights', name: 'Street Lights', version: '1.1.0', author: 'neonline', manifest: true,
+    desc: 'Brighter court lights for night games.', icon: mockArt('rings', 300, 55), size: 2240000, files: ['fe/LIGHTS.xsh', 'fe/HUD.XSH', 'courtfx/glow.fx'],
+    readme: '# Street Lights\nNight courts with brighter lamps.\n\n- Works with any HUD mod\n- Put it last if you use Midnight HUD' }),
+  () => ({ ok: true, token: 'm2', zip: 'nightowl-Midnight_HUD-1.3.0.zip', folder: 'nightowl-Midnight_HUD', name: 'Midnight HUD', version: '1.3.0', author: 'nightowl', manifest: true,
+    desc: 'The match HUD in deep blue with sharper digits.', icon: mockArt('rings', 230, 195), size: 1480000, files: ['fe/HUD.XSH', 'fe/OFFIND.xsh', 'fe/HUDFONT.xsh'],
+    replaces: { folder: 'nightowl-Midnight_HUD' } }),
+  () => ({ ok: true, token: 'm3', zip: 'green rims.zip', folder: 'green_rims', name: 'green_rims', manifest: false, size: 48000, files: ['fe/RIM.xsh'] }),
+  () => ({ ok: false, zip: 'super_mod_installer.zip', reason: 'Contains programs.' }),
+  () => ({ ok: false, zip: 'weird.zip', reason: 'Unsafe file path.' }),
+  () => ({ ok: false, zip: 'photos.zip', reason: 'No files the game reads.' })
+];
+function mockInspect(name) {
+  if (name && !/\.zip$/i.test(name)) { showIncoming({ ok: false, zip: name, reason: 'Not a .zip file.' }); return; }
+  const i = clamp(+S.set.mockZip || 0, 0, MOCK_ZIPS.length - 1);
+  const o = MOCK_ZIPS[i]();
+  if (name) o.zip = name;
+  showIncoming(o.ok ? normMod(o) : o);
+}
+function mockInstall(o) {
+  const t0 = performance.now(), dur = 1800;
+  const stepIt = () => {
+    if (MD.incoming !== o) return;
+    const p = Math.min(100, (performance.now() - t0) / dur * 100);
+    installProgress(p);
+    if (p < 100) { requestAnimationFrame(stepIt); return; }
+    const rep = o.replaces && modBy(o.replaces.folder);
+    const m = normMod(Object.assign({}, o, { on: rep ? rep.on : true }));
+    delete m.token; delete m.replaces; delete m.p;
+    if (rep) MD.list[MD.list.indexOf(rep)] = m; else MD.list.push(m);
+    installed(null, m.folder);
+  };
+  requestAnimationFrame(stepIt);
+}
+function modsInit(tokens) {
+  if (LIVE) { renderMods(); setTimeout(() => send('live:modsget'), 700); return; }   // after the host has the page
+  const empty = tokens.includes('mods:empty') || S.set.mockMods === 'none';
+  MD.list = empty ? [] : MOCK_MODS().map(normMod);
+  if (tokens.includes('mods:off')) S.set.mods = false;
+  renderMods();
+  const t = tokens.find(x => /^mods:/.test(x));
+  if (!t) return;
+  setTimeout(() => {
+    if (S.page !== 'mods') return;
+    if (t === 'mods:clash') focusEl(plateEl('courtside-Retro_Scoreboard'));
+    if (t === 'mods:details') focusEl(plateEl('nightowl-Midnight_HUD'));
+    if (t === 'mods:incoming') { S.set.mockZip = 0; mockInspect(); }
+    if (t === 'mods:installing') { S.set.mockZip = 0; mockInspect(); MD.installing = true; renderLens(); installProgress(58); }
+    if (t === 'mods:refused') { S.set.mockZip = 3; mockInspect(); }
+    if (t === 'mods:drop') { app.dataset.drop = '1'; renderMods(); }
+    if (t === 'mods:lifted') { const f = 'oldschool-Classic_Rosters'; focusEl(plateEl(f)); lift(f); moveMod(f, -1); }
+  }, 1600);
+}
+
 
 /* ------------------------------------------------------------------- init */
 function setAway() { if (document.hasFocus()) delete root.dataset.away; else root.dataset.away = '1'; }
@@ -3892,6 +4755,7 @@ function init() {
   if (tokens.includes('padtest')) setTimeout(() => setPadTest(true), 1200);
   if (startTab) { $$('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === startTab))); $$('.tab-panel').forEach(pn => { pn.hidden = pn.dataset.panel !== startTab; }); S.tab = startTab; }
   if (LIVE) initLive();
+  modsInit(tokens);
   const sc = tokens.find(t => t.startsWith('sc:'));
   if (sc && SCEN.includes(sc.slice(3))) S.set.scenario = SCEN.indexOf(sc.slice(3));
   const stepTok = tokens.find(t => t.startsWith('step:'));

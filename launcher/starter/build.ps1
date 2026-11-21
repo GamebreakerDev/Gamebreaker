@@ -45,7 +45,7 @@ try {
     if ($LASTEXITCODE) { throw "windres failed ($LASTEXITCODE)" }
     New-Item -ItemType Directory -Force (Split-Path $Out) | Out-Null
     $defs = @()
-    & $clang -std=c11 -O2 -Wall -Wextra -municode -mwindows -s @defs -o $Out starter.c $res '-Wl,--no-insert-timestamp' -luser32
+    & $clang -std=c11 -O2 -Wall -Wextra -municode -mwindows -s @defs -o $Out starter.c $res '-Wl,--no-insert-timestamp' -luser32 -lbcrypt
     if ($LASTEXITCODE) { throw "clang failed ($LASTEXITCODE)" }
 } finally { Pop-Location }
 

@@ -29,7 +29,9 @@ if ($AfterPid -gt 0) { Add-Content -Path $log -Value ("reopened " + (Get-Date -F
 else { Set-Content -Path $log -Value ("started " + (Get-Date -Format s)) -Encoding utf8 }
 function Note([string]$text) {
     $line = "{0,6} ms  {1}" -f $clock.ElapsedMilliseconds, $text
-    try { Add-Content -Path $log -Value $line -Encoding utf8 } catch { }
+    # The launcher reopened after the game writes to the same file: a line written at the
+    # same instant meets a sharing conflict, so try a few times before giving the line up.
+    for ($i = 0; $i -lt 5; $i++) { try { Add-Content -Path $log -Value $line -Encoding utf8 -ErrorAction Stop; break } catch { Start-Sleep -Milliseconds 25 } }
     Write-Host $line
 }
 # Anything that stops the launcher before or outside its window is shown, not
@@ -300,6 +302,8 @@ namespace GbHost {
             prev = g.Buttons;
             if ((pressed & 0x1000) != 0) sb.Append("a\n");
             if ((pressed & 0x2000) != 0) sb.Append("b\n");
+            if ((pressed & 0x4000) != 0) sb.Append("x\n");
+            if ((pressed & 0x8000) != 0) sb.Append("y\n");
             if ((pressed & 0x0100) != 0) sb.Append("lb\n");
             if ((pressed & 0x0200) != 0) sb.Append("rb\n");
             if ((pressed & 0x0010) != 0) sb.Append("start\n");
@@ -406,6 +410,14 @@ $view.add_CoreWebView2InitializationCompleted({
             if ($json.Length -lt 20000) { try { $null = $json | ConvertFrom-Json; $script:pageState = $json; Save-State } catch { Note 'page sent settings that are not valid JSON; ignored' } }
             return
         }
+        # A file dropped on the page arrives as an object beside the message (WebView2's
+        # postMessageWithAdditionalObjects); its path is read here, never sent by the page.
+        if ($text -eq 'live:modsdrop') {
+            $dp = ''
+            try { foreach ($ob in $m.AdditionalObjects) { if ($ob -and $ob.Path) { $dp = [string]$ob.Path; break } } } catch { Note ('drop: ' + $_.Exception.Message) }
+            if ($dp) { Send-ModInspect $dp } else { Send-EngObj ([ordered]@{ ev = 'modinspect'; ok = $false; zip = ''; reason = 'The dropped file could not be read.' }) }
+            return
+        }
         if ($text.StartsWith('live:')) { try { Invoke-Live $text.Substring(5) } catch { Note ('live: ' + $_.Exception.Message); Send-Eng @{ ev = 'error'; step = 'launcher'; code = 'launcher'; text = $_.Exception.Message } }; return }
         Note ("page says: " + $text)
         switch ($text) {
@@ -454,6 +466,30 @@ $script:disc = ''
 $script:eng = $null; $script:engKind = ''; $script:evFile = ''; $script:evPos = 0; $script:evRest = ''; $script:runId = 0
 
 function Send-Eng([hashtable]$o) { if ($script:ready) { $view.CoreWebView2.PostWebMessageAsString('eng:' + ($o | ConvertTo-Json -Compress -Depth 4)) } }
+function Send-EngObj($o) { if ($script:ready) { $view.CoreWebView2.PostWebMessageAsString('eng:' + ($o | ConvertTo-Json -Compress -Depth 6)) } }
+
+# Mods (setup\mods_lib.ps1). The folder is <install>\mods, beside saves\, where
+# the game looks (port\src\gb_mods.c); the launcher writes there only the mod
+# folders it installs or removes and mods\load_order.txt. A zip is looked at
+# here and unpacked by setup\mods.ps1 in its own process.
+. (Join-Path $script:relRoot 'setup\mods_lib.ps1')
+function Get-ModsDir { Join-Path $script:folder 'mods' }
+function Get-GameFilesDir { Join-Path $script:folder 'game_files' }
+$script:modZip = ''; $script:modToken = ''
+function Send-ModList {
+    $md = Get-ModsDir
+    try { Clear-GbModTemp $md; Send-EngObj ([ordered]@{ ev = 'mods'; list = (Get-GbModList $md (Get-GameFilesDir) (Join-Path $script:folder 'logs\game.log')).ToArray() }) }
+    catch { Note ('mods not listed: ' + $_.Exception.Message); Send-EngObj ([ordered]@{ ev = 'mods'; list = @(); error = 'The mods folder could not be read.' }) }
+}
+function Send-ModInspect([string]$path) {
+    $script:modZip = ''; $script:modToken = ''
+    try { $i = Get-GbZipInfo $path (Get-ModsDir) (Get-GameFilesDir) }
+    catch { Note ('mod zip not read: ' + $_.Exception.Message); $i = [ordered]@{ ok = $false; zip = (Split-Path $path -Leaf); reason = 'This file could not be read.' } }
+    if ($i.ok) { $script:modZip = $path; $script:modToken = [guid]::NewGuid().ToString('N'); $i.token = $script:modToken }
+    $i.ev = 'modinspect'
+    Note ('mod zip looked at: ' + $i.zip + $(if ($i.ok) { ' (' + $i.folder + ', ' + @($i.files).Count + ' game files)' } else { ': ' + $i.reason }))
+    Send-EngObj $i
+}
 function Test-Installed([string]$f) {
     (Test-Path (Join-Path $f 'build\gamebreaker.exe')) -and (Test-Path (Join-Path $f 'state\lift.done')) -and (Test-Path (Join-Path $f 'game_files\default.xbe'))
 }
@@ -469,6 +505,21 @@ function Get-ToolList {
         if ($_.name -eq 'xboxrecomp' -and (Test-Path (Join-Path $script:relRoot 'xboxrecomp\LICENSE'))) { $here = $true }
         @{ name = $_.name; size = $_.size; present = $here }
     })
+}
+# Graphics adapters, for the page's defaults (resolution, anti-aliasing and
+# texture filtering are lighter when the PC has integrated graphics only:
+# such a chip has a fraction of a card's pixel rate). The names are read by
+# setup\gpu_names.ps1, the same file setup's "This PC" line uses.
+. (Join-Path $script:relRoot 'setup\gpu_names.ps1')
+function Get-GraphicsInfo {
+    $names = @()
+    if (-not $names) {
+        try {
+            $names = @(Get-UsableGpu @(Get-CimInstance Win32_VideoController -ErrorAction Stop) | ForEach-Object { [string]$_.Name })
+        } catch { $names = @() }
+    }
+    $list = @($names | ForEach-Object { @{ name = $_; integrated = [bool](Test-IntegratedGpu $_) } })
+    @{ adapters = $list; integratedOnly = ($list.Count -gt 0 -and -not ($list | Where-Object { -not $_.integrated })) }
 }
 function Get-LiveInfo {
     $ver = 'dev'
@@ -487,7 +538,7 @@ function Get-LiveInfo {
     }
     $info = [ordered]@{
         folder = $script:folder; defaultFolder = $script:homeDefault
-        installed = (Test-Installed $script:folder); version = $ver; displays = $mons; tools = (Get-ToolList)
+        installed = (Test-Installed $script:folder); version = $ver; displays = $mons; gpu = (Get-GraphicsInfo); tools = (Get-ToolList)
         lastGame = $script:lastGame; auto = $Auto; dev = [bool]$Dev; update = (Get-UpdateInfo)
     }
     $info | ConvertTo-Json -Compress -Depth 4
@@ -656,6 +707,13 @@ function Select-Path([string]$kind) {
     try { Select-PathInner $kind } finally { $script:inDialog = $false }
 }
 function Select-PathInner([string]$kind) {
+    if ($kind -eq 'modzip') {
+        if ($TestModZip) { return $TestModZip }
+        $d = New-Object Windows.Forms.OpenFileDialog
+        $d.Title = 'Install a mod'; $d.Filter = 'Mod (*.zip)|*.zip|All files (*.*)|*.*'
+        if ($d.ShowDialog($form) -eq 'OK') { return $d.FileName }
+        return ''
+    }
     if ($kind -eq 'file') {
         if ($TestDisc) { return $TestDisc }
         $d = New-Object Windows.Forms.OpenFileDialog
@@ -829,6 +887,13 @@ function Get-GameEnv($set) {
     if ($set.unlockAll -eq $true) { $ge.GB_UNLOCK_ALL = '1' }
     # Frame counter (GB_SHOW_FPS): off unless chosen.
     if ($set.showFps) { $ge.GB_SHOW_FPS = '1' }
+    # Texture dump for mod makers (GB_TEXTURE_DUMP, port\src\gb_textures.c): on at
+    # start when chosen; Ctrl+F9 in the game toggles it either way. The game writes
+    # to <install>\texture_dump, beside saves\.
+    if ($set.texDump) { $ge.GB_TEXTURE_DUMP = '1' }
+    # Mods: the game reads <install>\mods by itself (beside GB_SAVE_DIR); the
+    # page's one switch turns every mod off for this start.
+    if ($set.mods -eq $false) { $ge.GB_MODS = '0' }
     # The game always runs on Direct3D 11 from the launcher (the slow reference
     # renderer was removed from its settings, 2026-11-16; the game keeps it for
     # developers).
@@ -882,6 +947,15 @@ $closeTimer.add_Tick({ $closeTimer.Stop(); $form.Close() })
 # Saves (port\src\gb_save.c): <install>\saves\UDATA\45410027\387E8D371AC2 holds
 # the save's files; saves\backups\yyyy-mm-dd_hhmmss\ holds copies of them (the
 # game makes one at start when the save changed, and keeps the newest five).
+# Two kinds are kept apart from those five and never aged out:
+# <date time>_before-unlock (before "Unlock everything") and
+# <date time>_mods-changed (before a start whose set of mods differs).
+$script:BackupName = '^\d{4}-\d\d-\d\d_\d{6}(_before-unlock|_mods-changed)?$'
+function Get-SaveBackups {
+    $bd = Join-Path $script:folder 'saves\backups'
+    @(Get-ChildItem $bd -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $script:BackupName } |
+      Sort-Object Name -Descending | ForEach-Object Name)
+}
 function Test-GameRunning {
     $exe = Join-Path $script:folder 'build\gamebreaker.exe'
     [bool](Get-Process gamebreaker -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -eq $exe } catch { $false } })
@@ -890,7 +964,7 @@ function Restore-SaveBackup([string]$name) {
     $root = Join-Path $script:folder 'saves'
     $src = Join-Path $root "backups\$name"
     $dst = Join-Path $root 'UDATA\45410027\387E8D371AC2'
-    if ($name -notmatch '^\d{4}-\d\d-\d\d_\d{6}(_before-unlock)?$' -or -not (Test-Path $src)) { Send-Eng @{ ev = 'restored'; ok = $false; text = 'That backup is gone.' }; return }
+    if ($name -notmatch $script:BackupName -or -not (Test-Path $src)) { Send-Eng @{ ev = 'restored'; ok = $false; text = 'That backup is gone.' }; return }
     if (Test-GameRunning) { Send-Eng @{ ev = 'restored'; ok = $false; text = 'Close the game first.' }; return }
     try {
         # The current save first becomes a backup of its own (a save made in the
@@ -981,10 +1055,15 @@ function Invoke-Live([string]$what) {
             try { Start-Process explorer.exe -ArgumentList ('"' + $sh + '"'); Send-Eng @{ ev = 'saves'; ok = $true } }
             catch { Send-Eng @{ ev = 'saves'; ok = $false; text = 'The screenshots folder could not be opened.' } }
         }
+        'opendump' {
+            # The texture dump writes here (beside saves\, from GB_SAVE_DIR).
+            $td = Join-Path $script:folder 'texture_dump'
+            New-Item -ItemType Directory -Force $td | Out-Null
+            try { Start-Process explorer.exe -ArgumentList ('"' + $td + '"'); Send-Eng @{ ev = 'saves'; ok = $true } }
+            catch { Send-Eng @{ ev = 'saves'; ok = $false; text = 'The texture dump folder could not be opened.' } }
+        }
         'backups' {
-            $bd = Join-Path $script:folder 'saves\backups'
-            $list = @(Get-ChildItem $bd -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d{4}-\d\d-\d\d_\d{6}(_before-unlock)?$' } |
-                      Sort-Object Name -Descending | ForEach-Object Name)
+            $list = @(Get-SaveBackups)
             Send-Eng @{ ev = 'backups'; list = $list; text = 'No backups yet' }
         }
         'keysget' { Send-PadKeys }
@@ -999,6 +1078,34 @@ function Invoke-Live([string]$what) {
             }
         }
         'restore' { Restore-SaveBackup $rest }
+        'modsget' { Send-ModList }
+        'modspick' { $p = Select-Path 'modzip'; if ($p) { Send-ModInspect $p } else { Send-EngObj ([ordered]@{ ev = 'modinspect'; cancelled = $true }) } }
+        'modsforget' { $script:modZip = ''; $script:modToken = '' }
+        'modsinstall' {
+            $why = ''
+            if (-not $script:modZip -or $rest -ne $script:modToken) { $why = 'Choose the mod again.' }
+            elseif (Test-GameRunning) { $why = 'Close the game first.' }
+            elseif ($script:eng -and -not $script:eng.HasExited) { $why = 'Setup is running.' }
+            if ($why) { Send-EngObj ([ordered]@{ ev = 'modfail'; reason = $why }); return }
+            $zip = $script:modZip; $script:modZip = ''; $script:modToken = ''
+            Start-Engine 'modinstall' @('-Action', 'install', '-ModsDir', (Get-ModsDir), '-GameFiles', (Get-GameFilesDir), '-Zip', $zip) (Join-Path $script:relRoot 'setup\mods.ps1')
+        }
+        'modsremove' {
+            if (Test-GameRunning) { Send-EngObj ([ordered]@{ ev = 'modremoved'; ok = $false; folder = $rest; reason = 'Close the game first.' }); return }
+            $r = Remove-GbMod (Get-ModsDir) $rest
+            Note ('mod removed: ' + $rest + ' (' + $(if ($r.ok) { if ($r.recycled) { 'Recycle Bin' } else { 'deleted' } } else { $r.reason }) + ')')
+            Send-EngObj ([ordered]@{ ev = 'modremoved'; ok = [bool]$r.ok; folder = $rest; reason = $r.reason })
+        }
+        'modsorder' {
+            try { Set-GbModOrder (Get-ModsDir) @(($rest | ConvertFrom-Json) | ForEach-Object { $_ }); Send-EngObj ([ordered]@{ ev = 'modorder'; ok = $true }) }
+            catch { Note ('mod order not written: ' + $_.Exception.Message); Send-EngObj ([ordered]@{ ev = 'modorder'; ok = $false; reason = 'The order could not be saved.' }) }
+        }
+        'modsopen' {
+            $md = Get-ModsDir; New-Item -ItemType Directory -Force $md | Out-Null
+            $t = $md
+            if ($rest -and -not (Test-GbModPath $rest) -and -not $rest.Contains('/')) { $c = Join-Path $md $rest; if (Test-Path -LiteralPath $c -PathType Container) { $t = $c } }
+            try { Start-Process explorer.exe -ArgumentList ('"' + $t + '"') } catch { Send-EngObj ([ordered]@{ ev = 'modnote'; text = 'The folder could not be opened.' }) }
+        }
         'stop'   { if ($script:eng -and -not $script:eng.HasExited) { Stop-Process -Id $script:eng.Id -Force -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process -Filter "ParentProcessId=$($script:eng.Id)" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } } }
         default  { Note "unknown request: $what" }
     }

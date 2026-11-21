@@ -74,21 +74,33 @@ Music, effects, crowd, voices and commentary have separate volumes. The game's
 twelve cheats are switches in the launcher, the last five versions of your save
 are kept as backups, and F12 takes a screenshot.
 
+Mods replace the game's files from a `mods` folder, managed on the launcher's Mods
+page: [Using mods](docs/MODS.md) and [Making a mod](docs/MODDING.md).
+
 <img src="https://github.com/GamebreakerDev/Gamebreaker/releases/download/media-1/launcher-page.jpg" alt="The launcher's display settings" width="100%">
 
 <details>
 <summary><b>Default keyboard controls</b></summary>
 <br>
 
-| Key | Button |
+| Key | Does |
 |---|---|
-| Enter | START |
-| Backspace | BACK |
-| Z, X, C, V | A, B, X, Y |
-| Arrow keys | D-pad |
-| W, A, S, D | Left stick |
-| Q, E | White, Black |
-| 1, 3 | Left and right trigger |
+| W, A, S, D | Move |
+| K | Pass, switch player (A) |
+| L | Shoot (B) |
+| J | Trick move, steal (X) |
+| I | Second trick, block, rebound (Y) |
+| Left Shift | 1 turbo (sprint, dunk) |
+| Space | 2 turbos (Gamebreaker, turbo block, trick counter) |
+| ; (semicolon) | All 3 turbos (advanced tricks and dunks, kick pass) |
+| U | Strategy (right stick click) |
+| Q, E | Pocket, cancel the Gamebreaker (White, Black) |
+| T, F, G, H | Right stick (Give 'n Go) |
+| Arrow keys | D-pad (menus) |
+| Enter | START (pause) |
+| Esc, Backspace | BACK |
+
+Every key can be changed in the launcher, Settings, Keyboard.
 
 </details>
 
@@ -165,6 +177,7 @@ contributors (MIT), whose sound and graphics chip models include parts of
 [Changelog](CHANGELOG.md)&emsp;[Building from source](docs/BUILDING.md)&emsp;[Contributing](CONTRIBUTING.md)
 
 <a href="https://playported.com/ports/2133-nba-street-vol-2/"><img src="https://playported.com/badge.svg" alt="Listed on PlayPorted"></a>
+<a href="https://decompbuddy.com/games/nba-street-vol-2-gamebreaker-xbox"><img src="https://decompbuddy.com/badge.svg" alt="Listed on Decomp Buddy"></a>
 
 ## Legal
 
@@ -174,8 +187,10 @@ Electronic Arts, EA Canada, the NBA, its teams or its players, or Microsoft.
 and its releases contain no game code, artwork, audio or data. Rights holders with
 a concern can open an issue.
 
-This repository's own code is under the [MIT licence](LICENSE), which grants no
-rights in the game.
+This repository's own code and documents are under the [MIT licence](LICENSE),
+which grants no rights in the game, its program, data, names or marks. Some
+files derive from the xboxrecomp toolkit and carry its notice as well; see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ---
 

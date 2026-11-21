@@ -81,6 +81,7 @@
 #include "gb_save.h"        /* the save-write guard */
 #include "gb_log.h"         /* the log for bug reports */
 #include "gb_overlay.h"     /* start screen, corner mark, frame counter, screenshots */
+#include "gb_textures.h"    /* mods' pictures by texture fingerprint, and the maker's dump */
 
 int gb_game_hz(void);        /* recomp_manual.c: the game's step rate, GB_GAME_HZ (60 unless set) */
 
@@ -102,6 +103,17 @@ void gb_pad_devices_changed(void);
 void gb_pad_shutdown(void);
 unsigned gb_pad_notice(char *buf, int size);
 #define GB_PAD_TIMER 0x6B50
+
+/* gb_mouse.c: the mouse in menus (GB_MOUSE_MENUS). */
+int  gb_mouse_enabled(void);
+int  gb_mouse_window_msg(HWND h, UINT m, WPARAM w, LPARAM l);
+int  gb_mouse_pointer_shown(void);
+void gb_mouse_timer(HWND h);
+void gb_mouse_key_pressed(void);
+void gb_mouse_note_batch(const void *vertices, uint32_t count, uint32_t stride,
+                         uint32_t surf_w, uint32_t surf_h, uint32_t aa_x, uint32_t aa_y);
+void gb_mouse_frame_end(int scene3d);
+#define GB_MOUSE_TIMER 0x6B51
 #define GB_WINDOW_TITLE "Gamebreaker (Direct3D 11)"
 
 #define GB_LOGICAL_W 640
@@ -154,6 +166,16 @@ typedef struct {
     int next;                                   /* bucket chain, -1 ends */
     ID3D11Texture2D *tex;
     ID3D11ShaderResourceView *srv;
+    /* Mods' pictures (gb_textures.c): what is drawn in place of this
+     * texture, or NULL. The game's own texture is still kept up to date
+     * underneath, so a change of content is seen as before. */
+    ID3D11ShaderResourceView *rsrv;
+    uint32_t rlevels;
+    uint64_t fp;                                /* its fingerprint now, 0 none worked out */
+    uint64_t fps[16];                           /* the fingerprints it has shown, the last 16 (ring) */
+    uint32_t last_new;                          /* frame it last showed a fingerprint not in fps */
+    uint8_t nfps, quick_new;                    /* entries in fps; new ones in a row, each soon after the last */
+    uint8_t live;                               /* new content all the time (films): never replaced or dumped */
 } GbTexture;
 
 typedef struct { uint32_t key[6]; ID3D11BlendState *obj; } GbBlend;
@@ -218,6 +240,9 @@ static struct {
     int scene_seen, panel_seen;          /* each has moved at least once */
     int panel_only;                      /* a menu panel's 3D view is the only one in use: its 3D is no 3D scene */
     uint64_t view_hash0;                 /* texture_view: the level-0 hash of the texture it returned, 0 none */
+    int view_repl;                       /* texture_view: it returned a mod's picture */
+    int texmods;                         /* gb_textures.c has pictures or dumps */
+    volatile LONG dump_screen;           /* Ctrl+F9 resumed the dump: write what is on screen (window thread sets it) */
     uint32_t as_anchor;                  /* 2D batches placed by the game on the wide view: left wide */
 
     /* pacing and display */
@@ -519,10 +544,46 @@ static void refit_fullscreen(HWND h)
  * window to have had focus once: a window that never had it (scripted
  * background runs) is never treated as having lost it. */
 static volatile LONG s_focus_has, s_focus_ever;
+static int s_ctrl_down;                 /* Ctrl held, from this window's own key messages (Ctrl+F9) */
 
 int gb_window_focus_lost(void)
 {
     return s_focus_ever && !s_focus_has;
+}
+
+/* For the mouse in menus (gb_mouse.c): a point in the window's client area
+ * as a point on the game's 640x480 menu screen, the way the last frames drew
+ * their 2D: kept at 4:3 in the middle of a wide picture, or stretched over
+ * it. Returns 0 when the point is outside the picture (black bars), or
+ * there is no picture yet. */
+int gb_d3d11_menu_point(int cx, int cy, float *gx, float *gy)
+{
+    float vx = G.view_x, vw = G.view_w, x, y;
+    if (!G.back_w || !G.back_h || G.view_w <= 0.0f || G.view_h <= 0.0f)
+        return 0;
+    if (G.cl_w && G.cl_h && (G.cl_w != (int)G.back_w || G.cl_h != (int)G.back_h)) {
+        cx = (int)((double)cx * G.back_w / G.cl_w);  /* a resize the buffer has not followed yet */
+        cy = (int)((double)cy * G.back_h / G.cl_h);
+    }
+    if (G.wide > 1.0 + 1e-6 && AS.keep2d && !(AS.auto2d && !(G.hist3d & 15u))) {
+        float w2 = (float)(vw / G.wide);         /* 2D kept at 4:3 in the middle */
+        vx += (vw - w2) * 0.5f;
+        vw = w2;
+    }
+    x = ((float)cx - vx) / vw;
+    y = ((float)cy - G.view_y) / G.view_h;
+    if (x < 0.0f || x >= 1.0f || y < 0.0f || y >= 1.0f)
+        return 0;
+    *gx = x * 640.0f;
+    *gy = y * 480.0f;
+    return 1;
+}
+
+/* For the mouse: the last frames drew a 3D scene (a match, the loading
+ * court, the pause menu over a match). A menu panel's 3D does not count. */
+int gb_d3d11_scene_3d(void)
+{
+    return (G.hist3d & 0xFFu) != 0;
 }
 
 static LRESULT CALLBACK gb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -562,6 +623,12 @@ static LRESULT CALLBACK gb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_ERASEBKGND:
         return 1;                       /* the swap chain paints every pixel */
     case WM_SETCURSOR:
+        if (gb_mouse_enabled() && LOWORD(l) == HTCLIENT) {
+            /* Mouse in menus: the pointer on menus, hidden in a match and
+             * after a controller or key press (gb_mouse.c). */
+            SetCursor(gb_mouse_pointer_shown() ? LoadCursor(NULL, IDC_ARROW) : NULL);
+            return TRUE;
+        }
         if (G.fullscreen && LOWORD(l) == HTCLIENT) {
             SetCursor(NULL);            /* no pointer over a fullscreen picture */
             return TRUE;
@@ -571,7 +638,21 @@ static LRESULT CALLBACK gb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (w == VK_RETURN)
             return 0;                   /* Alt+Enter: no error beep */
         break;
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_MOUSEWHEEL:
+    case WM_MOUSELEAVE:
+        if (gb_mouse_window_msg(h, m, w, l))
+            return 0;
+        break;
     case WM_TIMER:
+        if (w == GB_MOUSE_TIMER) {
+            gb_mouse_timer(h);
+            return 0;
+        }
         if (w == GB_PAD_TIMER) {
             /* "Controller N disconnected" in the title bar, from gb_pad.c. */
             static unsigned shown;
@@ -615,6 +696,22 @@ static LRESULT CALLBACK gb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
                 gb_overlay_request_shot();
             return 0;
         }
+        /* Ctrl+F9 switches the maker's texture dump on and off
+         * (gb_textures.c), at any time. Two keys, so it is not pressed by
+         * accident; F9 alone stays an ordinary key. */
+        if (w == VK_CONTROL)
+            s_ctrl_down = 1;
+        if (w == VK_F9 && m == WM_KEYDOWN && (s_ctrl_down || (GetKeyState(VK_CONTROL) & 0x8000))
+            && gb_tex_dump_ready()) {
+            if (!(l & (1 << 30))) {
+                int on = gb_tex_dump_toggle();
+                if (on >= 0)
+                    gb_overlay_notice_dump(on);
+                if (on > 0)
+                    InterlockedExchange(&G.dump_screen, 1);
+            }
+            return 0;
+        }
         if (!G.fixed_window && ((w == VK_RETURN && m == WM_SYSKEYDOWN && (l & (1 << 29)))
                                 || (w == VK_F11 && m == WM_KEYDOWN))) {
             if (!(l & (1 << 30)))
@@ -622,6 +719,7 @@ static LRESULT CALLBACK gb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             return 0;
         }
         side = xbox_InputWin32SideVk((int)w, (uint32_t)l);
+        gb_mouse_key_pressed();         /* a key hides the menu pointer */
         xbox_InputKeySet((int)w, 1);
         if (side)
             xbox_InputKeySet(side, 1);
@@ -630,6 +728,8 @@ static LRESULT CALLBACK gb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_KEYUP:
     case WM_SYSKEYUP: {
         int side = xbox_InputWin32SideVk((int)w, (uint32_t)l);
+        if (w == VK_CONTROL)
+            s_ctrl_down = 0;
         xbox_InputKeySet((int)w, 0);
         if (side)
             xbox_InputKeySet(side, 0);
@@ -641,6 +741,7 @@ static LRESULT CALLBACK gb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         return 0;
     case WM_KILLFOCUS:
         InterlockedExchange(&s_focus_has, 0);
+        s_ctrl_down = 0;
         xbox_InputKeysClear();          /* or a key held across Alt-Tab stays held */
         return 0;
     }
@@ -830,6 +931,8 @@ static DWORD WINAPI gb_window_thread(LPVOID unused)
         gb_pad_window(G.hwnd);
         gb_bgsound_window(G.hwnd);
         SetTimer(G.hwnd, GB_PAD_TIMER, 250, NULL);
+        if (gb_mouse_enabled())
+            SetTimer(G.hwnd, GB_MOUSE_TIMER, 50, NULL);
         {
             /* The title bar's small icon, drawn from the icon's own 16-pixel
              * image rather than shrunk from the large one. */
@@ -1347,6 +1450,7 @@ static int gb_init_once(void)
     compute_view();
     if (G.res_window)
         G.res = res_for_window();
+    G.texmods = gb_tex_init(G.dev, G.ctx);
     G.ok = 1;
     gb_log("[D3D11] back end up: %s window %ux%u, %s swap chain, internal resolution %s%.2fx,"
                     " frame limit %s, vsync %s\n",
@@ -1876,6 +1980,8 @@ static uint32_t verify_levels_now(const Nv2aTexture *t, const uint8_t *raw, uint
     return ok;
 }
 
+/* Also the base of the published texture fingerprint (gb_tex_fingerprint):
+ * mods name pictures by it, so it must never change. */
 static uint64_t hash_bytes(const uint8_t *p, size_t n)
 {
     uint64_t h = 0x9E3779B97F4A7C15ull ^ n, k;
@@ -2026,6 +2132,7 @@ static void texture_sweep(void)
     for (i = 0; i < G.ntextures; i++) {
         GbTexture *c = &G.textures[i];
         if (G.frame - c->used_frame > 600) {
+            if (c->rsrv) ID3D11ShaderResourceView_Release(c->rsrv);
             if (c->srv) ID3D11ShaderResourceView_Release(c->srv);
             if (c->tex) ID3D11Texture2D_Release(c->tex);
         } else {
@@ -2045,8 +2152,119 @@ static void texture_sweep(void)
     }
 }
 
+/* Level 0 of a texture as 0xAARRGGBB, for the maker's dump. */
+static int decode_level0(const Nv2aTexture *t, const uint8_t *raw, uint32_t *out)
+{
+    size_t n = (size_t)t->width * t->height, i;
+    uint32_t x, y;
+    Nv2aTexture lt;
+
+    if (bc_format(t->color) != DXGI_FORMAT_UNKNOWN) {
+        bc_decode_level(t->color, raw, t->width, t->height, out);
+        return 1;
+    }
+    if ((t->color == 0x12 || t->color == 0x1E) && t->pitch >= t->width * 4) {
+        for (y = 0; y < t->height; y++)
+            memcpy(out + (size_t)y * t->width, raw + (size_t)y * t->pitch, t->width * 4);
+        if (t->color == 0x1E)
+            for (i = 0; i < n; i++) out[i] |= 0xFF000000u;
+        return 1;
+    }
+    if (t->color == 0x11 && t->pitch >= t->width * 2) {
+        for (y = 0; y < t->height; y++) {
+            const uint16_t *src = (const uint16_t *)(raw + (size_t)y * t->pitch);
+            for (x = 0; x < t->width; x++) {
+                uint32_t v = src[x], r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
+                out[(size_t)y * t->width + x] = 0xFF000000u | ((r << 3 | r >> 2) << 16)
+                                              | ((g << 2 | g >> 4) << 8) | (b << 3 | b >> 2);
+            }
+        }
+        return 1;
+    }
+    lt = *t;
+    lt.levels = 1;
+    return nv2a_backend_decode_texture(&lt, out);
+}
+
+/* Ctrl+F9 resumed the maker's dump: textures already in the cache are not new, so
+ * the ones drawn in the last two frames are written now (each once a run,
+ * as always), so that pressing Ctrl+F9 on a screen catches what it shows. */
+static void dump_on_screen(void)
+{
+    int i;
+    for (i = 0; i < G.ntextures; i++) {
+        GbTexture *c = &G.textures[i];
+        Nv2aTexture lt;
+        const uint8_t *raw;
+        uint32_t *px;
+        if (!c->fp || c->live || G.frame - c->used_frame > 1 || c->w < 4 || c->h < 4
+            || !gb_tex_dump_wanted(c->fp))
+            continue;
+        memset(&lt, 0, sizeof lt);
+        lt.offset = c->offset; lt.width = c->w; lt.height = c->h;
+        lt.pitch = c->pitch; lt.color = c->color; lt.palette = c->palette; lt.levels = 1;
+        raw = guest_ptr(lt.offset, raw_bytes(&lt));
+        px = raw ? (uint32_t *)malloc((size_t)c->w * c->h * 4) : NULL;
+        if (px && decode_level0(&lt, raw, px))
+            gb_tex_dump(c->fp, c->w, c->h, c->color, c->levels, px, G.frame, G.has3d_cur || G.has3d_prev);
+        free(px);
+    }
+}
+
+/* Mods' pictures and the maker's dump (gb_textures.c), when a texture is
+ * new (changed 0) or the game has rewritten it (changed 1). A texture whose
+ * content is new again and again (a film: a new picture every four frames
+ * in each of two buffers) is marked live and left alone. One that goes back
+ * and forth between a few pictures is not: the HUD's meter atlas changes
+ * its palette over 200 times a match between 13 looks, each a picture a mod
+ * can replace. Live: 16 fingerprints in a row that the entry had not shown
+ * among its last 16, each within 8 frames of the one before. Render targets
+ * never come here (texture_view). */
+static void texture_mods(GbTexture *c, const Nv2aTexture *t, const uint8_t *raw, uint64_t pal, int changed)
+{
+    uint64_t fp;
+
+    if (c->rsrv) {
+        ID3D11ShaderResourceView_Release(c->rsrv);
+        c->rsrv = NULL;
+    }
+    if (c->live)
+        return;
+    fp = gb_tex_fingerprint(c->hash0, t->width, t->height, t->color, pal);
+    c->fp = fp;
+    {
+        int k, known = 0;
+        for (k = 0; k < c->nfps && k < 16; k++)
+            if (c->fps[k] == fp)
+                known = 1;
+        if (!known) {
+            if (changed && G.frame - c->last_new <= 8) {
+                if (++c->quick_new >= 16) {
+                    c->live = 1;
+                    return;
+                }
+            } else {
+                c->quick_new = 0;
+            }
+            c->fps[c->nfps++ & 15] = fp;
+            if (c->nfps > 32)
+                c->nfps = 16 + (c->nfps & 15);  /* keeps "full" and the next slot to write */
+            c->last_new = G.frame;
+        }
+    }
+    c->rsrv = gb_tex_replacement(fp, t->color, &c->rlevels);
+    if (t->width >= 4 && t->height >= 4 && gb_tex_dump_wanted(fp)) {
+        uint32_t *px = (uint32_t *)malloc((size_t)t->width * t->height * 4);
+        if (px && decode_level0(t, raw, px))
+            gb_tex_dump(fp, t->width, t->height, t->color, c->levels, px, G.frame,
+                        G.has3d_cur || G.has3d_prev);
+        free(px);
+    }
+}
+
 /* The view to sample for this batch's texture, or NULL to draw untextured.
- * *levels_out: the view's mip levels (1 for a render target). */
+ * *levels_out: the view's mip levels (1 for a render target). G.view_repl:
+ * the view is a mod's picture (its levels are all the picture's). */
 static ID3D11ShaderResourceView *texture_view(const Nv2aTexture *t, const GbTarget *drawing_into,
                                               uint32_t *levels_out)
 {
@@ -2058,6 +2276,7 @@ static ID3D11ShaderResourceView *texture_view(const Nv2aTexture *t, const GbTarg
 
     *levels_out = 1;
     G.view_hash0 = 0;
+    G.view_repl = 0;
     if (!t->width || !t->height || t->width > 4096 || t->height > 4096)
         return NULL;
     /* A surface this back end has drawn into recently, used as a texture:
@@ -2097,7 +2316,7 @@ static ID3D11ShaderResourceView *texture_view(const Nv2aTexture *t, const GbTarg
         bytes = chain_bytes(t, c->levels);  /* the levels uploaded: a rewrite of any is seen */
         c->used_frame = G.frame;
         if (c->checked_frame != G.frame) {      /* once a frame: has the title rewritten it? */
-            uint64_t h = hash_bytes(raw, bytes) ^ palette_hash(t);
+            uint64_t pal = palette_hash(t), h = hash_bytes(raw, bytes) ^ pal;
             G.st_hash_bytes += bytes;
             c->checked_frame = G.frame;
             if (h != c->hash) {
@@ -2105,9 +2324,16 @@ static ID3D11ShaderResourceView *texture_view(const Nv2aTexture *t, const GbTarg
                 c->hash0 = hash_bytes(raw, chain_bytes(t, 1));
                 if (!texture_upload(c, t, raw))
                     return NULL;
+                if (G.texmods)
+                    texture_mods(c, t, raw, pal, 1);
             }
         }
         G.view_hash0 = c->hash0;
+        if (c->rsrv) {
+            G.view_repl = 1;
+            *levels_out = c->rlevels;
+            return c->rsrv;
+        }
         return c->srv;
     }
     if (G.ntextures == GB_MAX_TEXTURES) {
@@ -2122,10 +2348,15 @@ static ID3D11ShaderResourceView *texture_view(const Nv2aTexture *t, const GbTarg
     c->want = levels;
     c->levels = verify ? verify_levels(t, raw, levels) : levels;
     bytes = chain_bytes(t, c->levels);
-    c->hash = hash_bytes(raw, bytes) ^ palette_hash(t);
-    c->hash0 = hash_bytes(raw, chain_bytes(t, 1));
-    G.st_hash_bytes += bytes;
-    c->checked_frame = c->used_frame = G.frame;
+    {
+        uint64_t pal = palette_hash(t);
+        c->hash = hash_bytes(raw, bytes) ^ pal;
+        c->hash0 = hash_bytes(raw, chain_bytes(t, 1));
+        G.st_hash_bytes += bytes;
+        c->checked_frame = c->used_frame = G.frame;
+        if (G.texmods)
+            texture_mods(c, t, raw, pal, 0);
+    }
     *levels_out = c->levels;
     if (!texture_upload(c, t, raw)) {
         static uint32_t told[8];
@@ -2137,11 +2368,20 @@ static ID3D11ShaderResourceView *texture_view(const Nv2aTexture *t, const GbTarg
             told[ntold++] = t->color;
             gb_log("[D3D11] texture format 0x%02X cannot be read: drawn untextured\n", t->color);
         }
+        if (c->rsrv) {
+            ID3D11ShaderResourceView_Release(c->rsrv);
+            c->rsrv = NULL;
+        }
         return NULL;
     }
     c->next = G.buckets[b];
     G.buckets[b] = G.ntextures++;
     G.view_hash0 = c->hash0;
+    if (c->rsrv) {
+        G.view_repl = 1;
+        *levels_out = c->rlevels;
+        return c->rsrv;
+    }
     return c->srv;
 }
 
@@ -2285,6 +2525,8 @@ static D3D11_TEXTURE_ADDRESS_MODE address(uint32_t a)
 /* levels: the mip levels of the view sampled (texture_view), 1 for the top
  * level only. Above 1 (GB_D3D11_ANISO, a 3D batch) the game's mip mode and
  * level-of-detail bias apply, and anisotropic filtering with G.tex_q > 1. */
+#define GB_LEVELS_REPL 0x80000000u     /* sampler_state: the view is a mod's picture */
+
 static ID3D11SamplerState *sampler_state(const Nv2aTexture *t, uint32_t levels)
 {
     /* SET_TEXTURE_FILTER: MIN in bits 16-23 (1 nearest, 2 linear, 3 and 4
@@ -2295,10 +2537,19 @@ static ID3D11SamplerState *sampler_state(const Nv2aTexture *t, uint32_t levels)
     uint32_t key[5];
     D3D11_SAMPLER_DESC sd;
     int i, minlin = !(min == 1 || min == 3 || min == 5), maglin = mag != 1;
-    int mip = levels > 1 && min >= 3 && min <= 6 ? (min >= 5 ? 2 : 1) : 0;   /* 1 nearest level, 2 blended */
+    int repl = (levels & GB_LEVELS_REPL) != 0;
+    int mip = (levels &= ~GB_LEVELS_REPL) > 1 && min >= 3 && min <= 6 ? (min >= 5 ? 2 : 1) : 0;   /* 1 nearest level, 2 blended */
     int aniso = mip && minlin && G.tex_q > 1 ? G.tex_q : 0;
     int32_t bias = 0;
 
+    /* A mod's picture, often larger than the texture it replaces: its levels
+     * are what bring it down to the size drawn, so it is sampled between
+     * levels even where the game asked for none (blended for a smooth
+     * filter, nearest for a nearest one). */
+    if (repl && levels > 1 && !mip) {
+        mip = minlin ? 2 : 1;
+        aniso = mip && minlin && G.tex_q > 1 ? G.tex_q : 0;
+    }
     if (mip) {
         /* Signed, 8 fraction bits (as other emulators read it). 0 on every
          * texture of the traced match; the first other value is logged. */
@@ -2463,7 +2714,7 @@ static void gb_draw(const Nv2aSurface *s, const Nv2aBatch *b)
                 continue;                   /* unreadable: reads white, as on the CPU path */
             if (st == 0)
                 tex0_hash = G.view_hash0;
-            smp[st] = sampler_state(tx, flat || G.ab_off ? 1 : lv);
+            smp[st] = sampler_state(tx, G.view_repl ? lv | GB_LEVELS_REPL : flat || G.ab_off ? 1 : lv);
             if (G.tex_q && !flat) {
                 if (lv > 1) G.st_tex_mip++; else G.st_tex_one3d++;
             }
@@ -2490,7 +2741,7 @@ static void gb_draw(const Nv2aSurface *s, const Nv2aBatch *b)
         flags |= 1;
     } else if (b->texture && (srv[0] = texture_view(b->texture, t, &lv)) != NULL) {
         tex0_hash = G.view_hash0;
-        smp[0] = sampler_state(b->texture, flat || G.ab_off ? 1 : lv);
+        smp[0] = sampler_state(b->texture, G.view_repl ? lv | GB_LEVELS_REPL : flat || G.ab_off ? 1 : lv);
         su[0] = 1.0f / (float)b->texture->width;
         sv[0] = 1.0f / (float)b->texture->height;
         flags |= 2;
@@ -2905,6 +3156,8 @@ presented:
         }
     }
     G.hist3d = G.hist3d << 1 | (uint32_t)(G.has3d_cur != 0);
+    if (gb_mouse_enabled())
+        gb_mouse_frame_end(G.has3d_cur || G.has3d_prev);
     {
         /* Which of the game's 3D views were set up in the last 15 frames
          * (the game runs a frame or two ahead of this point). */
@@ -2948,6 +3201,11 @@ presented:
     }
 
     G.frame++;
+    if (G.texmods) {
+        gb_tex_frame(G.frame);
+        if (InterlockedExchange(&G.dump_screen, 0))
+            dump_on_screen();
+    }
     if ((G.frame & 255) == 0)
         texture_sweep();
     limit_frame_rate();
@@ -2985,8 +3243,13 @@ static void gb_clear_locked(const Nv2aSurface *s, const Nv2aRenderState *rs,
 
 static void gb_draw_locked(const Nv2aSurface *s, const Nv2aBatch *b)
 {
+    extern void gb_cpu_executor(void);
+    gb_cpu_executor();      /* src/gb_cpu.c: once, on the executor thread */
     EnterCriticalSection(&gb_lock);
     gb_draw(s, b);
+    if (gb_mouse_enabled() && b->vertices)   /* the menu's labels and star (gb_mouse.c) */
+        gb_mouse_note_batch(b->vertices, b->count, sizeof(Nv2aVertex), s->width, s->height,
+                            s->aa_sx, s->aa_sy);
     LeaveCriticalSection(&gb_lock);
 }
 

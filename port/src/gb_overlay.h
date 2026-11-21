@@ -35,6 +35,9 @@ unsigned gb_overlay_start_left_ms(void);
 
 /* F12: save the next picture to the screenshots folder. */
 void gb_overlay_request_shot(void);
+/* Ctrl+F9 (gb_textures.c): show "Texture dump on" (1) or "Texture dump off"
+ * (0) for a moment. Any thread. */
+void gb_overlay_notice_dump(int on);
 
 #ifdef __cplusplus
 }

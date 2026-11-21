@@ -1,0 +1,169 @@
+/* ===================================================================
+   MODS: the stack on the beam.
+   Load order is a flow of light from top to bottom: the first mod on the
+   beam is read first and wins a clash. A mod that is on touches the beam;
+   one that is off slides out of it. The lens beside the stack is a small
+   ring (a status, so a circle) whose lit arc is the share of the mod's
+   files that reach the game.
+   =================================================================== */
+.page-mods { display: flex; flex-direction: column; gap: 1rem; overflow: hidden; padding-bottom: 1rem; }
+.mods-head { display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap; padding-left: 2.2rem; }
+.mods-master { display: flex; align-items: center; gap: .9rem; }
+.mods-master .row-label { font-family: var(--font-display); font-size: 1.35rem; font-weight: var(--display-weight); letter-spacing: var(--display-tracking); }
+.mods-count { color: var(--text-3); font-size: .9rem; min-width: 5.5rem; }
+.mods-actions { display: flex; gap: .6rem; margin-left: auto; }
+
+.mods-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(17rem, 1fr); gap: 2.4rem; }
+
+/* ---------- the stack ---------- */
+.stack-wrap { position: relative; min-height: 0; overflow: hidden auto; padding: .6rem 1.2rem 2rem 2.2rem; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.beam { position: absolute; left: 1.1rem; top: 0; bottom: 0; width: 2px; pointer-events: none;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--art-1) 70%, transparent) 6%, color-mix(in srgb, var(--art-2) 60%, transparent) 70%, transparent);
+  box-shadow: 0 0 .9rem color-mix(in srgb, var(--art-1) 50%, transparent); opacity: .85;
+  transition: opacity var(--t-slow) var(--ease), filter var(--t-slow) var(--ease); }
+.beam-flow { position: absolute; left: -2px; width: 6px; height: 7rem; top: -7rem; border-radius: 3px;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--art-2) 80%, white 20%), transparent);
+  filter: blur(1px); opacity: .5; animation: beam-flow 5.5s linear infinite; }
+@keyframes beam-flow { to { transform: translateY(calc(100vh + 7rem)); } }
+.page-mods[data-master="off"] .beam { opacity: .18; filter: grayscale(1); }
+.page-mods[data-master="off"] .beam-flow { animation-play-state: paused; opacity: 0; }
+
+.clash-arcs { position: absolute; left: 0; top: 0; width: 2.2rem; height: 100%; overflow: visible; pointer-events: none; }
+.clash-arcs path { fill: none; stroke: var(--art-3); stroke-width: 1.8; opacity: .85; stroke-dasharray: 3 4; animation: arc-run 2.4s linear infinite; }
+.clash-arcs circle { fill: var(--art-3); opacity: .8; }
+.clash-arcs text { fill: var(--art-3); font: 600 10px var(--font-mono); opacity: .9; }
+@keyframes arc-run { to { stroke-dashoffset: -14; } }
+.page-mods[data-master="off"] .clash-arcs { opacity: 0; }
+
+.stack { list-style: none; display: flex; flex-direction: column; gap: .7rem; position: relative; }
+
+/* A plate: a slanted surface, upright content. */
+.plate { position: relative; isolation: isolate; display: grid; grid-template-columns: 2.2rem 3rem minmax(0, 1fr); align-items: center; gap: 1rem;
+  min-height: 4.4rem; padding: .55rem 1.4rem .55rem .6rem; cursor: default; outline: none; user-select: none;
+  transition: transform var(--t-slow) var(--ease-out), opacity var(--t-slow) var(--ease), filter var(--t-slow) var(--ease); }
+.plate::before { content: ""; position: absolute; inset: 0; z-index: -1; transform: skewX(var(--lean-deg)); border-radius: .3rem;
+  background: var(--surface); border: 1px solid var(--line);
+  transition: background-color var(--t-fast), border-color var(--t-fast), box-shadow var(--t-med); }
+.plate::after { /* the light that crosses the plate when it joins the beam */
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; transform: skewX(var(--lean-deg)); border-radius: .3rem;
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--art-2) 30%, transparent) 50%, transparent 70%) no-repeat 170% 0 / 260% 100%; opacity: 0; }
+.plate.lit::after { opacity: 1; background-position: -70% 0; transition: background-position 900ms var(--ease), opacity 200ms; }
+.plate:hover::before { background: var(--surface-2); }
+.plate:focus::before, .plate.selected::before { background: var(--surface-2); border-color: var(--line-strong); }
+.plate:focus { transform: translateX(.35rem); }
+
+/* the contact: a slanted bridge from the beam into the plate */
+.plate-contact { position: absolute; left: -1.25rem; top: 50%; width: 1.7rem; height: .32rem; margin-top: -.16rem; border-radius: 1px;
+  transform: skewX(var(--lean-deg)); background: linear-gradient(90deg, var(--art-1), var(--art-2));
+  box-shadow: 0 0 .8rem color-mix(in srgb, var(--art-2) 60%, transparent); transform-origin: left center;
+  transition: transform var(--t-slow) var(--ease-out), opacity var(--t-med); cursor: pointer; }
+.plate-contact::after { content: ""; position: absolute; inset: -.7rem -.2rem; } /* a bigger target for the mouse */
+.plate[data-on="0"] { transform: translateX(1.9rem); opacity: .5; filter: saturate(.25); }
+.plate[data-on="0"]:focus { transform: translateX(2.2rem); opacity: .8; }
+.plate[data-on="0"] .plate-contact { transform: skewX(var(--lean-deg)) scaleX(.18); opacity: .5; background: var(--text-3); box-shadow: none; }
+.page-mods[data-master="off"] .plate { filter: saturate(.15); opacity: .55; }
+.page-mods[data-master="off"] .plate-contact { opacity: .25; box-shadow: none; }
+
+.plate-index { font-family: var(--font-mono); font-size: .78rem; color: var(--text-3); text-align: right; }
+.plate[data-on="1"] .plate-index { color: var(--art-2); }
+.plate-icon { width: 3rem; height: 3rem; display: block; object-fit: cover; image-rendering: auto;
+  clip-path: polygon(14% 0, 100% 0, 86% 100%, 0 100%); background: var(--surface-2); }
+.plate-text { min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
+.plate-name { font-weight: 620; font-size: 1.02rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plate-meta { font-size: .82rem; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plate-side { display: flex; flex-direction: column; align-items: flex-end; gap: .25rem; font-size: .8rem; color: var(--text-3); white-space: nowrap; }
+.plate-clash { position: relative; isolation: isolate; padding: .05rem .55rem; color: var(--art-3); font-weight: 600; }
+.plate-clash::before { content: ""; position: absolute; inset: 0; z-index: -1; transform: skewX(var(--lean-deg)); border-radius: .2rem;
+  border: 1px solid color-mix(in srgb, var(--art-3) 45%, transparent); background: color-mix(in srgb, var(--art-3) 9%, transparent); }
+.plate-warn { color: var(--warn); }
+
+/* lifted for a move (controller X, or a drag) */
+.plate.lifted { z-index: 2; transform: translateX(.9rem) scale(1.015); }
+.plate.lifted::before { border-color: var(--accent); box-shadow: 0 1.1rem 2.4rem -1rem color-mix(in srgb, var(--accent) 70%, transparent); }
+.plate.dragging { transition: none; z-index: 3; }
+.stack.reordering .plate:not(.dragging) { transition: transform 220ms var(--ease-out), opacity var(--t-slow), filter var(--t-slow); }
+
+/* the incoming package: dashed until installed, filled by the install */
+.plate.incoming::before { border-style: dashed; border-color: color-mix(in srgb, var(--accent) 70%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.plate.incoming .plate-contact { transform: skewX(var(--lean-deg)) scaleX(.45); opacity: .6; }
+.plate-fill { position: absolute; inset: 0; z-index: -1; pointer-events: none; transform: skewX(var(--lean-deg)); border-radius: .3rem; overflow: hidden; }
+.plate-fill::before { content: ""; position: absolute; inset: 0; transform-origin: left center; transform: scaleX(calc(var(--p, 0) / 100));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 35%, transparent), color-mix(in srgb, var(--art-2) 30%, transparent)); transition: transform 200ms linear; }
+/* refused: the plate parts along its slant, as the mark does, and dims */
+.plate.refused::before { border-color: color-mix(in srgb, var(--danger) 55%, transparent); border-style: solid; background: color-mix(in srgb, var(--danger) 6%, transparent);
+  clip-path: polygon(0 0, 52% 0, 44% 100%, 0 100%); transform: skewX(var(--lean-deg)) translateX(-.8rem) rotate(-.6deg); transition: transform 900ms var(--ease-out); }
+.plate.refused .plate-fill { clip-path: polygon(56% 0, 100% 0, 100% 100%, 48% 100%); transform: skewX(var(--lean-deg)) translateX(.8rem) rotate(.6deg); }
+.plate.refused .plate-fill::before { transform: none; background: color-mix(in srgb, var(--danger) 6%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent); }
+.plate.refused .plate-contact { opacity: 0; }
+.plate.refused .plate-icon { filter: grayscale(1); opacity: .6; }
+
+/* empty: one waiting slot on the beam; it also marks where a drop lands */
+.slot { position: relative; isolation: isolate; display: flex; flex-direction: column; justify-content: center; gap: .35rem; min-height: 5.5rem; padding: 1rem 1.6rem 1rem 3.4rem; margin-top: .2rem; color: var(--text-2); }
+.slot::before { content: ""; position: absolute; inset: 0; z-index: -1; transform: skewX(var(--lean-deg)); border-radius: .3rem;
+  border: 1px dashed var(--line-strong); animation: slot-breathe 4.8s var(--ease) infinite; }
+.slot::after { content: ""; position: absolute; left: -1.25rem; top: 50%; width: 1.7rem; height: .32rem; margin-top: -.16rem; transform: skewX(var(--lean-deg)) scaleX(.3); transform-origin: left; background: var(--text-3); opacity: .5; }
+@keyframes slot-breathe { 50% { border-color: color-mix(in srgb, var(--accent) 45%, transparent); } }
+.slot-title { font-weight: 620; color: var(--text); font-size: 1.05rem; }
+.slot[hidden] { display: none; }
+.page-mods[data-count="0"] .slot { min-height: 8rem; }
+.app[data-drop="1"] .slot { display: flex; }
+.app[data-drop="1"] .slot::before { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); animation: none; }
+.app[data-drop="1"] .slot::after { transform: skewX(var(--lean-deg)) scaleX(1); background: var(--accent); opacity: 1; transition: transform var(--t-slow) var(--ease-out); }
+.app[data-drop="1"] .beam { opacity: 1; filter: brightness(1.3); }
+
+/* ---------- the lens ---------- */
+.lens { min-height: 0; overflow: hidden auto; display: flex; flex-direction: column; gap: 1rem; padding: .4rem .4rem 2rem 0; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.lens[hidden] { display: none; }
+.lens-top { display: grid; grid-template-columns: 6.6rem minmax(0, 1fr); gap: 1.2rem; align-items: center; }
+.lens-ring { position: relative; width: 6.6rem; height: 6.6rem; }
+.lens-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
+.lens-ring .r-track { fill: none; stroke: var(--line); stroke-width: 3; }
+.lens-ring .r-used { fill: none; stroke: url(#gbLensGrad); stroke-width: 3; stroke-linecap: round; transition: stroke-dasharray 700ms var(--ease-out);
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--art-2) 60%, transparent)); }
+.lens-ring .r-lost { fill: none; stroke: var(--art-3); stroke-width: 3; opacity: .7; transition: stroke-dasharray 700ms var(--ease-out), stroke-dashoffset 700ms var(--ease-out); }
+.lens[data-on="0"] .r-used { stroke: var(--text-3); filter: none; }
+.lens-ring img { position: absolute; inset: 1.05rem; width: calc(100% - 2.1rem); height: calc(100% - 2.1rem); border-radius: 50%; object-fit: cover; }
+.lens-name { font-family: var(--font-display); font-size: 1.6rem; line-height: 1.12; font-weight: var(--display-weight); letter-spacing: var(--display-tracking); overflow-wrap: anywhere; }
+.lens-meta { color: var(--text-2); font-size: .9rem; margin-top: .25rem; }
+.lens-state { font-size: .85rem; margin-top: .35rem; color: var(--text-3); }
+.lens-desc { color: var(--text); line-height: 1.45; }
+.lens-sec { display: flex; flex-direction: column; gap: .5rem; }
+.lens-h { font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
+.files { font-family: var(--font-mono); font-size: .78rem; color: var(--text-2); display: flex; flex-direction: column; gap: .15rem; max-height: 9.5rem; overflow: auto; scrollbar-width: thin; }
+.files .f-lost { color: var(--art-3); }
+.files .f-unused { color: var(--text-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-3) 60%, transparent); }
+.files .f-note { font-family: var(--font); font-size: .78rem; }
+.readme { font-size: .86rem; line-height: 1.5; color: var(--text-2); max-height: 11rem; overflow: auto; padding-right: .4rem; scrollbar-width: thin; }
+.readme h4 { color: var(--text); font-size: .92rem; margin: .5rem 0 .15rem; }
+.readme p { margin: .25rem 0; }
+.readme ul { margin: .2rem 0 .2rem 1.1rem; }
+.lens-actions { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: .3rem; }
+.lens-refusal { display: flex; flex-direction: column; gap: .4rem; }
+.lens-refusal .lens-name { color: var(--text); }
+.lens-refusal p { color: var(--text-2); }
+.btn-danger::before { border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+.btn-danger:hover:not(:disabled)::before { background: color-mix(in srgb, var(--danger) 16%, transparent); border-color: var(--danger); }
+
+@media (max-width: 1100px) {
+  .mods-body { grid-template-columns: minmax(0, 1fr); }
+  .lens { border-top: 1px solid var(--line); padding-top: 1rem; }
+}
+.nav-count { margin-left: .45rem; font-family: var(--font-mono); font-size: .75rem; color: var(--art-2); }
+.nav-count:empty { display: none; }
+.plate-meta span + span { margin-left: .9rem; }
+.slot span:empty { display: none; }
+.slot span:empty { display: none; }
+.page-mods .slot { margin-left: 0; }
+.plate-size { color: var(--text-3); }
+.readme li { position: relative; padding-left: .9rem; }
+.readme li::before { content: ""; position: absolute; left: 0; top: .45em; width: .16rem; height: .7em; background: var(--text-3); transform: skewX(var(--lean-deg)); }
+.readme ul { margin-left: .2rem; }
+.lens-actions { margin-top: 0; }
+.app[data-mode="main"][data-view="mods"] { --hx: 99%; --hy: 99%; --hs: 15rem; }
+/* tags ride on the plate's top edge, so the name keeps the whole width */
+.plate-side { position: absolute; right: 1.6rem; top: -.62rem; flex-direction: row; gap: .4rem; }
+.plate-side:empty { display: none; }
+.plate-clash { background: var(--bg); font-size: .76rem; }
+.plate-warn { position: relative; isolation: isolate; padding: .05rem .55rem; font-size: .76rem; }
+.plate-warn::before { content: ""; position: absolute; inset: 0; z-index: -1; transform: skewX(var(--lean-deg)); border-radius: .2rem; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: var(--bg); }
+.stack { gap: .95rem; padding-top: .4rem; }

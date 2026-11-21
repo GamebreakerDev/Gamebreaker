@@ -18,7 +18,7 @@
 #
 # What it never touches: anything outside the release folder; and inside it,
 # the player's settings (launcher\prototype\state.json), the remembered
-# install folder (setup\folder.txt), and the saves, screenshots, logs, game
+# install folder (setup\folder.txt), and the saves, screenshots, logs, mods, game
 # files, tools and build folders, should the install folder be the release
 # folder itself. A manifest naming any of those is refused whole.
 #
@@ -90,7 +90,7 @@ function Compare-Version([string]$a, [string]$b) {
 }
 
 # Paths an update may never write, move or delete (lower case, forward slashes).
-$protectedDirs = @('update/', 'game/', 'saves/', 'screenshots/', 'logs/', 'game_files/', 'tools/', 'build/', 'state/', 'launcher/prototype/lib/', 'launcher/prototype/.webview/', '.git/')
+$protectedDirs = @('update/', 'game/', 'saves/', 'screenshots/', 'logs/', 'mods/', 'game_files/', 'tools/', 'build/', 'state/', 'launcher/prototype/lib/', 'launcher/prototype/.webview/', '.git/')
 $protectedFiles = @('launcher/prototype/state.json', 'launcher/prototype/last-run.txt', 'setup/folder.txt', 'setup/release_private.txt', 'setup/manifest.json')
 function Test-SafePath([string]$p) {
     if ($p -notmatch '^[A-Za-z0-9._ +()-]+(/[A-Za-z0-9._ +()-]+)*$') { return $false }

@@ -281,11 +281,13 @@ Step 'checks' {
         default { Say 'Smart App Control' 'not present' }
     }
 
-    # The graphics adapter, for the launcher's "This PC" list. Only named here:
-    # whether it can do Direct3D 11 is found when the game starts.
-    $gpu = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
-             Where-Object { $_.Name -notmatch 'Basic|Virtual|Parsec|Remote' } | Sort-Object { [long]$_.AdapterRAM } -Descending |
-             Select-Object -ExpandProperty Name) | Select-Object -First 1
+    # The graphics adapter the game will draw on, for the launcher's "This PC" list:
+    # the working dedicated chip when there is one, otherwise the integrated one
+    # (gpu_names.ps1). Only named here: whether it can do Direct3D 11 is found
+    # when the game starts.
+    . (Join-Path $PSScriptRoot 'gpu_names.ps1')
+    $adapters = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue)
+    $gpu = Select-GameGpu $adapters
     if ($gpu) { Say 'Graphics' $gpu }
     Emit @{ ev = 'check'; key = 'gpu'; ok = [bool]$gpu; text = $(if ($gpu) { [string]$gpu } else { 'No graphics adapter found' }) }
 

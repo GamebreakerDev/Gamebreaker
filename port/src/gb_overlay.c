@@ -112,7 +112,7 @@ static const char OV_HLSL[] =
 typedef struct { float rect[4], vp[4], col[4], a[4], b[4]; uint32_t mode[4]; } OvConst;
 
 /* ── text ─────────────────────────────────────────────────────────────── */
-enum { T_NAME_BIG, T_VER, T_LEGAL, T_NAME_CORNER, T_SAVED, T_NOTSAVED, T_D0, T_COUNT = T_D0 + 10 };
+enum { T_NAME_BIG, T_VER, T_LEGAL, T_NAME_CORNER, T_SAVED, T_NOTSAVED, T_DUMPON, T_DUMPOFF, T_D0, T_COUNT = T_D0 + 10 };
 typedef struct { int x, y, w, h, ascent, adv; } OvText;
 typedef struct { const wchar_t *s; double em; int min, weight; const wchar_t *const *face; int h_of_view; } OvSpec;
 
@@ -154,6 +154,7 @@ static struct {
     int staging_w, staging_h, staging_rgba, staging_wait;
     double notice_at;
     int notice_ok;
+    int notice_id;                              /* the text shown: T_SAVED, T_NOTSAVED, T_DUMPON, T_DUMPOFF */
 } OV;
 
 static volatile LONGLONG ov_start_qpc;          /* first picture, in QueryPerformanceCounter ticks; 0 before */
@@ -163,6 +164,7 @@ static volatile LONG ov_any_movie;
 static volatile LONG ov_shot_request;
 static volatile LONG ov_shot_busy;              /* a worker is writing a file */
 static volatile LONG ov_shot_result;            /* 1 saved, 2 not saved; taken by the next frame */
+static volatile LONG ov_dump_note;              /* 1 texture dump on, 2 off; taken by the next frame */
 
 static double ov_now_ms(void)
 {
@@ -345,6 +347,8 @@ static void ov_build_text(int win_h, int view_h)
     spec[T_NAME_CORNER] = ov_spec(L"Gamebreaker", 0.042, 14, 600, display, 1);
     spec[T_SAVED]       = ov_spec(L"Screenshot saved", 0.026, 13, 400, textf, 0);
     spec[T_NOTSAVED]    = ov_spec(L"Screenshot not saved", 0.026, 13, 400, textf, 0);
+    spec[T_DUMPON]      = ov_spec(L"Texture dump on", 0.026, 13, 400, textf, 0);
+    spec[T_DUMPOFF]     = ov_spec(L"Texture dump off", 0.026, 13, 400, textf, 0);
     for (i = 0; i < 10; i++) {
         digit[i][0] = (wchar_t)(L'0' + i); digit[i][1] = 0;
         spec[T_D0 + i] = ov_spec(digit[i], 0.030, 13, 600, mono, 0);
@@ -561,7 +565,7 @@ static void ov_notice(int H, double below, double t)
 {
     double m = H * 0.018 > 8 ? H * 0.018 : 8, em = H * 0.026 > 13 ? H * 0.026 : 13;
     double a = t < 1200 ? 1.0 : 1.0 - (t - 1200) / 300.0;
-    int id = OV.notice_ok ? T_SAVED : T_NOTSAVED;
+    int id = OV.notice_id;
     double bw = ov_text_w(id) + 1.6 * em, bh = 1.7 * em, y = below > 0 ? below + 0.4 * em : m;
     if (a <= 0) return;
     a = ease3(a);
@@ -837,7 +841,9 @@ void gb_overlay_frame(ID3D11DeviceContext *ctx, ID3D11RenderTargetView *rtv, IDX
         below = ov_counter(win_h);
     }
     r = InterlockedExchange(&ov_shot_result, 0);
-    if (r) { OV.notice_ok = r == 1; OV.notice_at = now; }
+    if (r) { OV.notice_ok = r == 1; OV.notice_id = r == 1 ? T_SAVED : T_NOTSAVED; OV.notice_at = now; }
+    r = InterlockedExchange(&ov_dump_note, 0);
+    if (r) { OV.notice_id = r == 1 ? T_DUMPON : T_DUMPOFF; OV.notice_at = now; }
     if (OV.notice_at > 0 && now - OV.notice_at < 1500)
         ov_notice(win_h, below, now - OV.notice_at);
 
@@ -845,4 +851,9 @@ void gb_overlay_frame(ID3D11DeviceContext *ctx, ID3D11RenderTargetView *rtv, IDX
         ID3D11ShaderResourceView *none = NULL;
         ID3D11DeviceContext_PSSetShaderResources(ctx, 0, 1, &none);
     }
+}
+
+void gb_overlay_notice_dump(int on)
+{
+    InterlockedExchange(&ov_dump_note, on ? 1 : 2);
 }

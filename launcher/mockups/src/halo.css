@@ -16,6 +16,7 @@
 @property --hy   { syntax: '<percentage>'; inherits: true; initial-value: 92%; }
 @property --hs   { syntax: '<length>';     inherits: true; initial-value: 480px; }
 @property --hp   { syntax: '<number>';     inherits: true; initial-value: 0; }
+@property --okmix { syntax: '<number>';    inherits: true; initial-value: 0; }
 @property --rot  { syntax: '<angle>';      inherits: true; initial-value: 0deg; }
 
 :root {
@@ -70,7 +71,7 @@
 .app {
   display: block; overflow: clip;
   --seam: 27%; --hx: 94%; --hy: 92%; --hs: 30rem;
-  transition: --seam var(--t-slow) var(--ease-out), --hx var(--t-xslow) var(--ease-out), --hy var(--t-xslow) var(--ease-out), --hs var(--t-xslow) var(--ease-out), --hp 200ms linear;
+  transition: --seam var(--t-slow) var(--ease-out), --hx var(--t-xslow) var(--ease-out), --hy var(--t-xslow) var(--ease-out), --hs var(--t-xslow) var(--ease-out), --hp var(--hp-t, 200ms) var(--hp-e, linear), --okmix var(--ok-t, 900ms) ease-in-out;
 }
 .app[data-mode="main"]                  { --seam: 21%; --hx: 13%; --hy: 106%; --hs: 24rem; }
 .app[data-mode="main"][data-view="home"]{ --seam: 36%; --hx: 56%; --hy: 48%; --hs: 33rem; }
@@ -90,7 +91,8 @@
 .hp-l .halo { translate: calc(-50% - .9rem) calc(-50% + 1.7rem); opacity: .55; }   /* slipped along the break */
 .halo span { position: absolute; inset: 0; border-radius: 50%; transition: opacity var(--t-med) var(--ease); }
 .halo-line, .halo-glow::before {
-  background: conic-gradient(from var(--rot), var(--art-1), var(--art-2), var(--art-3), var(--art-1));
+  /* --okmix tints the ring green when a job is done, and eases back */
+  background: conic-gradient(from var(--rot), color-mix(in oklab, var(--art-1), var(--ok) calc(var(--okmix) * 1%)), color-mix(in oklab, var(--art-2), var(--ok) calc(var(--okmix) * 1%)), color-mix(in oklab, var(--art-3), var(--ok) calc(var(--okmix) * 1%)), color-mix(in oklab, var(--art-1), var(--ok) calc(var(--okmix) * 1%)));
   animation: halo-rot 40s linear infinite;
 }
 .halo-line, .halo-fill {
@@ -101,7 +103,7 @@
 .halo-glow::before { content: ""; position: absolute; inset: 0; border-radius: 50%;
   -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 1.3rem), #000 calc(100% - 1.2rem), #000 calc(100% - 1px), transparent 100%);
           mask: radial-gradient(closest-side, transparent calc(100% - 1.3rem), #000 calc(100% - 1.2rem), #000 calc(100% - 1px), transparent 100%); }
-.halo-fill { background: conic-gradient(var(--accent) 0, var(--art-2) calc(var(--hp) * 1%), transparent 0); opacity: 0; }
+.halo-fill { background: conic-gradient(color-mix(in oklab, var(--accent), var(--ok) calc(var(--okmix) * 1%)) 0, color-mix(in oklab, var(--art-2), var(--ok) calc(var(--okmix) * 1%)) calc(var(--hp) * 1%), transparent 0); opacity: 0; }
 @keyframes halo-rot { to { --rot: 360deg; } }
 
 .app[data-halo="work"] .halo-line { opacity: .16; }
@@ -109,7 +111,9 @@
 .app[data-halo="work"] .halo-fill { opacity: 1; }
 .app[data-halo="spin"] .halo-line, .app[data-halo="spin"] .halo-glow::before { animation-duration: 2.2s; }
 .app[data-halo="error"] .halo-line, .app[data-halo="error"] .halo-glow::before { background: conic-gradient(from 28deg, var(--danger) 0 78%, transparent 78%); animation: none; }
-.app[data-halo="ok"] .halo-line, .app[data-halo="ok"] .halo-glow::before { background: var(--ok); animation: none; }
+.app[data-halo="ok"] { --okmix: 100; --ok-t: 350ms; }
+.app[data-halo="ok"] .halo-fill, .app[data-halo="settle"] .halo-fill { opacity: 1; }
+.app[data-halo="settle"] { --hp-t: 650ms; --hp-e: cubic-bezier(.4, 0, .2, 1); }
 
 /* Fine grain over everything, so the dark never looks flat */
 .app::after { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: .05; mix-blend-mode: overlay;
@@ -275,8 +279,16 @@
    parallelogram at the seam's angle; its text stays upright.
    The surface is a skewed pseudo-element behind the content.
    =================================================================== */
-.app .btn, .app .btn:hover:not(:disabled), .app .seg, .app .cycler, .app .ring-tag, .app .ring-tag:hover, .app .toast, .app .pick-tile, .app .pick-tile:hover, .app .file-card {
+.app .btn, .app .seg, .app .cycler, .app .ring-tag, .app .toast, .app .pick-tile, .app .file-card {
   position: relative; isolation: isolate; background: none; border-color: transparent; border-radius: 0; box-shadow: none;
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+/* Hover only clears the base sheet's hover surface. It must never move a control:
+   a hover rule that set position here outranked a control's own placement (the
+   Updates page's Check now, the ring's update tag), so the control jumped away
+   from the pointer, lost hover, jumped back, and flickered. */
+.app .btn:hover:not(:disabled), .app .ring-tag:hover, .app .pick-tile:hover {
+  background: none; border-color: transparent; box-shadow: none;
   -webkit-backdrop-filter: none; backdrop-filter: none;
 }
 .app .ring-tag { position: absolute; }
