@@ -14,7 +14,7 @@ compiles it on your PC, from your own disc.
 Xbox release.
 
 <p align="center">
-  <a href="https://github.com/GamebreakerDev/Gamebreaker/releases/latest"><img src="docs/art/download.svg" alt="Download the latest release" width="220"></a>
+  <a href="https://github.com/GamebreakerDev/Gamebreaker/releases/download/v0.1.1/Gamebreaker-0.1.1.zip"><img src="docs/art/download.svg" alt="Download Gamebreaker 0.1.1 (zip)" width="220"></a>
 </p>
 
 <p align="center">
