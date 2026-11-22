@@ -282,14 +282,30 @@ function Get-GbModOrder([string]$ModsDir) {
 }
 
 # ------------------------------------------------------------------ listing
-# Archive entries the game did not find at its last start ([MODS] lines in its
-# log), by mod folder: lower-case paths with "/". Only lines newer than the mod
-# folder count, so a mod installed or replaced since then starts clean.
+# What the game said about each mod at its last start ([MODS] lines in its log),
+# by mod folder: archive entries it did not find and items it refused (lower-case
+# paths with "/"); and for pictures (gb_textures.c) whether the mod's pictures
+# were in use ("<mod>: N textures by fingerprint") and which it drew ("texture
+# <fp> from <mod> (...)", fingerprints in lower case). The game writes at most
+# 200 picture lines a start, then "textures: 200 picture lines written; no more
+# this start": after that line a picture with no line may have been drawn too
+# (capped). Only lines newer than the mod folder count, so a mod installed or
+# replaced since then starts clean.
 function Get-GbModLogMisses([string]$LogFile) {
     $out = @{}
     if (-not $LogFile -or -not (Test-Path -LiteralPath $LogFile)) { return $out }
     $when = (Get-Item -LiteralPath $LogFile).LastWriteTimeUtc
+    $capped = $false
+    $entry = {
+        param([string]$name)
+        $k = $name.ToLowerInvariant()
+        if (-not $out[$k]) { $out[$k] = @{ when = $when; files = New-Object System.Collections.ArrayList; why = @{}; pictures = $false; drawn = @{}; capped = $false } }
+        $out[$k]
+    }
     foreach ($l in [IO.File]::ReadAllLines($LogFile)) {
+        if ($l -match '\[MODS\] texture ([0-9a-fA-F]{16}) from (.+) \(\d+x\d+') { (& $entry $Matches[2]).drawn[$Matches[1].ToLowerInvariant()] = 1; continue }
+        if ($l -match '\[MODS\] ([^\\]+): \d+ textures? by fingerprint$') { (& $entry $Matches[1]).pictures = $true; continue }
+        if ($l -match '\[MODS\] textures: \d+ picture lines written; no more this start') { $capped = $true; continue }
         # Not found: "<mod>\<archive>\<entry>: <archive> has no entry ...". Refused
         # (wrong kind of entry, text that is not UTF-8, a line past the end):
         # "<mod>\<archive>\<entry>[\<n>.txt] is not used: <why>".
@@ -297,11 +313,11 @@ function Get-GbModLogMisses([string]$LogFile) {
         elseif ($l -match '\[MODS\] ([^\\]+)\\(.+?) is not used: (.+)$') { $why = $Matches[3] }
         elseif ($l -match '\[MODS\] ([^\\]+)\\(textures\\.+?): (.+); not used$') { $why = $Matches[3] }   # a picture (gb_textures.c)
         else { continue }
-        $k = $Matches[1].ToLowerInvariant()
-        if (-not $out[$k]) { $out[$k] = @{ when = $when; files = New-Object System.Collections.ArrayList; why = @{} } }
+        $e = & $entry $Matches[1]
         $f = $Matches[2].Replace('\', '/').ToLowerInvariant()
-        if ($why) { $out[$k].why[$f] = $why } else { [void]$out[$k].files.Add($f) }
+        if ($why) { $e.why[$f] = $why } else { [void]$e.files.Add($f) }
     }
+    if ($capped) { foreach ($e in @($out.Values)) { $e.capped = $true } }
     $out
 }
 function Get-GbModList([string]$ModsDir, [string]$GameFiles, [string]$LogFile = '') {
@@ -334,12 +350,24 @@ function Get-GbModList([string]$ModsDir, [string]$GameFiles, [string]$LogFile = 
         # What the game said at its last start, if newer than the mod: entries it
         # did not find (named by the entry, so a line of text by its entry's
         # folder) and items it refused, with why.
-        $refused = New-Object System.Collections.ArrayList
+        # Pictures: drawn lists those the game drew from this mod; seen is 'all'
+        # when the log says the mod's pictures were in use, 'part' when it also
+        # hit its cap on picture lines (a picture with no line may have been
+        # drawn), '' when the log says nothing of them (an older log, the mod off,
+        # or a game that does not write these lines).
+        $refused = New-Object System.Collections.ArrayList; $drawn = New-Object System.Collections.ArrayList; $seen = ''
         if (($m = $misses[$e.folder.ToLowerInvariant()]) -and $m.when -gt (Get-Item -LiteralPath $dir).LastWriteTimeUtc) {
             foreach ($f in @($files) + @($textures)) {
                 $lf = $f.ToLowerInvariant(); $up = $(if ($lf.LastIndexOf('/') -gt 0) { $lf.Substring(0, $lf.LastIndexOf('/')) } else { '' })
                 if (($m.files -contains $lf -or ($up -and $m.files -contains $up)) -and -not $missing.Contains($f)) { [void]$missing.Add($f) }
                 elseif ($m.why.ContainsKey($lf)) { [void]$refused.Add([ordered]@{ file = $f; why = $m.why[$lf] }) }
+            }
+            if ($textures.Count -and ($m.pictures -or $m.drawn.Count)) {
+                $seen = $(if ($m.capped) { 'part' } else { 'all' })
+                for ($i = 0; $i -lt $textures.Count; $i++) {
+                    $fp = ([string]$texKeys[$i]).Substring(4)          # "tex:<fingerprint>"
+                    if ($m.drawn.ContainsKey($fp)) { [void]$drawn.Add($textures[$i]) }
+                }
             }
         }
         $manPath = Join-Path $dir 'manifest.json'; $hasMan = Test-Path -LiteralPath $manPath
@@ -355,7 +383,8 @@ function Get-GbModList([string]$ModsDir, [string]$GameFiles, [string]$LogFile = 
         [void]$list.Add([ordered]@{
             folder = $e.folder; on = [bool]$e.on; name = $info.name; version = $info.version; author = $info.author; desc = $info.desc; website = $info.website
             manifest = [bool]$hasMan; icon = $icon; readme = $readme; files = @($files); keys = @($keys); notes = @($notes); unused = @($unused)
-            textures = @($textures); textureKeys = @($texKeys); size = $size; bad = $bad; missing = @($missing); refused = @($refused) })
+            textures = @($textures); textureKeys = @($texKeys); size = $size; bad = $bad; missing = @($missing); refused = @($refused)
+            drawn = @($drawn); seen = $seen })
     }
     , $list
 }

@@ -440,6 +440,9 @@ $form.Controls.Add($view)
 # 'live:<what>'; answers go back as 'eng:<json>' lines, the same shape as the
 # engine's own events (setup.ps1 -Events), which are forwarded unchanged.
 $script:relRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path     # the release (or repository) folder
+# Mouse in menus is offered (with MOUSE_MENUS_READY in core.js). $false: Play
+# never passes GB_MOUSE_MENUS, whatever the saved settings say.
+$script:MouseMenusReady = $false
 $script:setupPs = Join-Path $script:relRoot 'setup\setup.ps1'
 $script:updatePs = Join-Path $script:relRoot 'setup\update.ps1'
 $script:upDir = Join-Path $script:relRoot 'update'
@@ -762,14 +765,78 @@ function Set-PadRumble([string]$path, [int[]]$values) {
 $script:keyControls = @('a', 'b', 'x', 'y', 'black', 'white', 'left_trigger', 'right_trigger', 'start', 'back', 'left_thumb', 'right_thumb',
     'dpad_up', 'dpad_down', 'dpad_left', 'dpad_right', 'left_stick_up', 'left_stick_down', 'left_stick_left', 'left_stick_right',
     'right_stick_up', 'right_stick_down', 'right_stick_left', 'right_stick_right')
+# Keys are bound by their place on the keyboard: a name is the US key at that
+# place (W is the key left of E's place, whatever its label), as the game reads
+# them (port\src\gb_pad_logic.c). The typing block is the part that moves
+# between layouts: these names and their US scan codes.
+$script:posKeys = [ordered]@{
+    '1' = 0x02; '2' = 0x03; '3' = 0x04; '4' = 0x05; '5' = 0x06; '6' = 0x07; '7' = 0x08; '8' = 0x09; '9' = 0x0A; '0' = 0x0B
+    minus = 0x0C; equals = 0x0D
+    Q = 0x10; W = 0x11; E = 0x12; R = 0x13; T = 0x14; Y = 0x15; U = 0x16; I = 0x17; O = 0x18; P = 0x19; leftbracket = 0x1A; rightbracket = 0x1B
+    A = 0x1E; S = 0x1F; D = 0x20; F = 0x21; G = 0x22; H = 0x23; J = 0x24; K = 0x25; L = 0x26; semicolon = 0x27; quote = 0x28; grave = 0x29
+    backslash = 0x2B; Z = 0x2C; X = 0x2D; C = 0x2E; V = 0x2F; B = 0x30; N = 0x31; M = 0x32; comma = 0x33; period = 0x34; slash = 0x35
+}
+$script:usVk = @{ minus = 0xBD; equals = 0xBB; leftbracket = 0xDB; rightbracket = 0xDD; semicolon = 0xBA; quote = 0xDE; grave = 0xC0; backslash = 0xDC; comma = 0xBC; period = 0xBE; slash = 0xBF }
+function Get-UsVk([string]$name) { if ($name.Length -eq 1) { [int][char]$name.ToUpperInvariant() } else { $script:usVk[$name] } }
+# The player's keyboard layout: the scan code of the key that gives a virtual
+# key, and the label printed on the key at a scan code.
+$script:layoutReady = $false; $script:fakeScan = $null; $script:fakeLabel = $null
+function Initialize-Layout {
+    if ($script:layoutReady) { return }
+    $script:layoutReady = $true
+    if (-not ('GbKeys.L' -as [type])) {
+        Add-Type -Namespace GbKeys -Name L -MemberDefinition '[DllImport("user32.dll")] public static extern uint MapVirtualKeyExW(uint code, uint type, System.IntPtr hkl); [DllImport("user32.dll")] public static extern System.IntPtr GetKeyboardLayout(uint thread);'
+    }
+}
+function Get-LayoutScan([int]$vk) {
+    if ($script:fakeScan) {
+        if ($script:fakeScan.ContainsKey($vk)) { return $script:fakeScan[$vk] }
+        foreach ($k in $script:posKeys.Keys) { if ((Get-UsVk $k) -eq $vk) { return $script:posKeys[$k] } }
+        return 0
+    }
+    [int][GbKeys.L]::MapVirtualKeyExW([uint32]$vk, 0, [GbKeys.L]::GetKeyboardLayout(0))
+}
+function Get-LayoutLabel([int]$scan) {
+    if ($script:fakeScan) { if ($script:fakeLabel.ContainsKey($scan)) { return $script:fakeLabel[$scan] } else { return '' } }
+    $hkl = [GbKeys.L]::GetKeyboardLayout(0)
+    $vk = [GbKeys.L]::MapVirtualKeyExW([uint32]$scan, 1, $hkl)       # scan code to virtual key
+    $ch = [GbKeys.L]::MapVirtualKeyExW($vk, 2, $hkl) -band 0x7FFF     # its character; the top bit marks a dead key
+    if ($ch -gt 32) { ([string][char]$ch).ToUpperInvariant() } else { '' }
+}
+# A key name from a line written by letter (files from before keys were bound
+# by place): the place of the key that carries that letter on this keyboard.
+function ConvertTo-PlaceName([string]$name) {
+    $n = $name.Trim(); if ($n.Length -eq 1) { $n = $n.ToUpperInvariant() } else { $n = $n.ToLowerInvariant() }
+    if (-not $script:posKeys.Contains($n)) { return $name.Trim() }
+    $scan = Get-LayoutScan (Get-UsVk $n)
+    foreach ($k in $script:posKeys.Keys) { if ($script:posKeys[$k] -eq $scan) { return $k } }
+    $n
+}
+# The labels on this keyboard of the keys in the typing block, by place name.
+function Get-KeyLabels {
+    Initialize-Layout
+    $labels = @{}
+    foreach ($k in $script:posKeys.Keys) { $t = Get-LayoutLabel $script:posKeys[$k]; if ($t) { $labels[$k] = $t } }
+    $labels
+}
 function Get-PadKeys([string]$path) {
     $out = @{ '1' = @{}; '2' = @{}; '3' = @{}; '4' = @{} }
     if (-not (Test-Path -LiteralPath $path)) { return $out }
+    $all = [IO.File]::ReadAllLines($path)
+    # A section names its keys by letter unless it says "keys_by = position".
+    $byLetter = @{ '1' = $true; '2' = $true; '3' = $true; '4' = $true }
     $pl = ''
-    foreach ($l in [IO.File]::ReadAllLines($path)) {
+    foreach ($l in $all) {
+        if ($l -match '^\s*\[') { $pl = $(if ($l -match '^\s*\[player([1-4])\]') { $Matches[1] } else { '' }); continue }
+        if ($pl -and $l -match '^\s*keys_by\s*=\s*(\w+)') { $byLetter[$pl] = $Matches[1] -ne 'position' }
+    }
+    Initialize-Layout
+    $pl = ''
+    foreach ($l in $all) {
         if ($l -match '^\s*\[') { $pl = $(if ($l -match '^\s*\[player([1-4])\]') { $Matches[1] } else { '' }); continue }
         if ($pl -and $l -match '^\s*key_([a-z_]+)\s*=\s*([^;#]*)') {
             $ctl = $Matches[1].ToLowerInvariant(); $v = $Matches[2].Trim()
+            if ($byLetter[$pl] -and $v -ne 'none') { $v = (($v -split ',') | Where-Object { $_.Trim() } | ForEach-Object { ConvertTo-PlaceName $_ }) -join ', ' }
             if ($script:keyControls -contains $ctl) { $out[$pl][$ctl] = $v }
         }
     }
@@ -791,13 +858,15 @@ function Set-PadKeys([string]$path, [int]$player, $keys) {
         $lines.Add('; The launcher (Settings) writes the rumble and keyboard lines; anything else you add is kept.')
         $lines.Add('; Every key is described in the release''s port\config\controls.ini.')
     }
-    # Every [playerN] section loses its key lines; the first one takes the new ones.
+    # Every [playerN] section loses its key lines; the first one takes the new
+    # ones, named by place (the page reads keys by place).
     $first = -1; $inSec = $false
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -match '^\s*\[') { $inSec = $lines[$i] -match "^\s*\[player$player\]\s*(;.*)?$"; if ($inSec -and $first -lt 0) { $first = $i }; continue }
-        if ($inSec -and $lines[$i] -match '^\s*key_[A-Za-z_]+\s*=') { $lines.RemoveAt($i); $i-- }
+        if ($inSec -and $lines[$i] -match '^\s*(key_[A-Za-z_]+|keys_by)\s*=') { $lines.RemoveAt($i); $i-- }
     }
     if ($new.Count) {
+        $new.Insert(0, 'keys_by = position')
         if ($first -lt 0) { $lines.Add(''); $lines.Add("[player$player]"); $first = $lines.Count - 1 }
         $lines.InsertRange($first + 1, $new)
     }
@@ -805,7 +874,31 @@ function Set-PadKeys([string]$path, [int]$player, $keys) {
     [IO.File]::WriteAllLines($tmp, $lines, (New-Object Text.UTF8Encoding($false)))
     Move-Item -LiteralPath $tmp $path -Force
 }
-function Send-PadKeys { Send-Eng @{ ev = 'keys'; ok = $true; players = (Get-PadKeys (Join-Path $script:folder 'controls.ini')) } }
+# The players whose keys come from lines written by letter: they keep the rest
+# of the old keyboard too (the defaults by letter), as the game reads them.
+function Get-LetterKeyed([string]$path) {
+    $out = @{ '1' = $false; '2' = $false; '3' = $false; '4' = $false }
+    if (-not (Test-Path -LiteralPath $path)) { return $out }
+    $byLetter = @{ '1' = $true; '2' = $true; '3' = $true; '4' = $true }; $has = @{}
+    $pl = ''
+    foreach ($l in [IO.File]::ReadAllLines($path)) {
+        if ($l -match '^\s*\[') { $pl = $(if ($l -match '^\s*\[player([1-4])\]') { $Matches[1] } else { '' }); continue }
+        if (-not $pl) { continue }
+        if ($l -match '^\s*keys_by\s*=\s*(\w+)') { $byLetter[$pl] = $Matches[1] -ne 'position' }
+        elseif ($l -match '^\s*key_[a-z_]+\s*=') { $has[$pl] = $true }
+    }
+    foreach ($p in '1', '2', '3', '4') { $out[$p] = [bool]($has[$p] -and $byLetter[$p]) }
+    $out
+}
+function Send-PadKeys {
+    $ini = Join-Path $script:folder 'controls.ini'
+    $labels = @{}; $placeOf = @{}
+    try {
+        $labels = Get-KeyLabels
+        foreach ($k in $script:posKeys.Keys) { $placeOf[$k] = ConvertTo-PlaceName $k }
+    } catch { Note ("key labels not read: " + $_.Exception.Message) }
+    Send-Eng @{ ev = 'keys'; ok = $true; players = (Get-PadKeys $ini); labels = $labels; placeOf = $placeOf; letterKeyed = (Get-LetterKeyed $ini) }
+}
 function Get-GameEnv($set) {
     $ge = [ordered]@{}
     if ($set.windowMode -eq 'fullscreen') { $ge.GB_D3D11_FULLSCREEN = '1' }
@@ -891,6 +984,12 @@ function Get-GameEnv($set) {
     # start when chosen; Ctrl+F9 in the game toggles it either way. The game writes
     # to <install>\texture_dump, beside saves\.
     if ($set.texDump) { $ge.GB_TEXTURE_DUMP = '1' }
+    # Mouse in menus (GB_MOUSE_MENUS, port\src\gb_mouse.c): Beta, off unless
+    # chosen; off passes nothing (the game's own default is off). Passed only
+    # while the feature is offered ($script:MouseMenusReady, with
+    # MOUSE_MENUS_READY in core.js): a saved "on" from a test build counts for
+    # nothing while the row is hidden.
+    if ($script:MouseMenusReady -and $set.mouseMenus -eq $true) { $ge.GB_MOUSE_MENUS = '1' }
     # Mods: the game reads <install>\mods by itself (beside GB_SAVE_DIR); the
     # page's one switch turns every mod off for this start.
     if ($set.mods -eq $false) { $ge.GB_MODS = '0' }

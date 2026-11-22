@@ -31,8 +31,18 @@ typedef struct GbPadPlayerCfg {
     uint8_t     rumble_pct;   /* 0 = off, 100 = the game's own strength */
 } GbPadPlayerCfg;
 
+/* The player's keyboard layout, for key lines written by letter: the scan
+ * code of the key that gives virtual key `vk` (Windows' MapVirtualKeyEx), or
+ * 0 if no key gives it. */
+typedef int (*gb_keys_scan_fn)(int vk);
+
 typedef struct GbPadConfig {
     GbPadPlayerCfg player[GB_PAD_PLAYERS];
+    /* Set by the caller after gb_pad_config_defaults and before parsing; NULL
+     * reads letter-written lines as US positions (the same keys on a US
+     * keyboard). */
+    gb_keys_scan_fn letter_scan;
+    int letter_keys;          /* key names moved from a letter to its position while loading */
     int order;                /* GB_ORDER_* */
     int keyboard_player;      /* 1..4, or 0 for none */
     int background;           /* 1 = pads still count when the window is not in front */
@@ -64,6 +74,33 @@ void gb_pad_apply_preset(GbPadPlayerCfg *p, int preset);
  * none clears it); controls without such a line keep their default keys. */
 typedef void (*gb_pad_warn_fn)(const char *msg);
 void gb_pad_config_parse(GbPadConfig *c, const char *text, gb_pad_warn_fn warn);
+
+/* ---- keys by position --------------------------------------------------- */
+
+/* Keys are held by position: the window passes on the US key at the place of
+ * the key pressed, so W A S D, K L J I and ; sit in the same places on AZERTY,
+ * QWERTZ and every other layout. Only the typing block moves between layouts
+ * (letters, digits, punctuation, and the extra key left of Z on ISO
+ * keyboards); every other key (Enter, Shift, arrows, F keys, the keypad)
+ * keeps its own code.
+ *
+ * The US virtual key at the key with scan code `scan` (set 1, as in a
+ * WM_KEYDOWN's lParam bits 16 to 23), or 0 for a key outside the typing block
+ * or an extended one. */
+int gb_keys_pos_vk(unsigned scan, int extended);
+/* The scan code of US virtual key `vk` if it is a typing-block key, else 0. */
+int gb_keys_pos_scan(int vk);
+
+/* Key lines in controls.ini name keys by position ("keys_by = position", which
+ * the launcher writes in every [playerN] section it saves) or, in a section
+ * without that line, by the letter printed on the key (every file written
+ * before keys were bound by position, and files edited by hand). A letter-
+ * written name is moved to the position of the key that carries that letter
+ * on the player's layout (c->letter_scan), so a key that worked before keeps
+ * working; on a US keyboard nothing moves. A player whose keys come from such
+ * lines keeps the rest of the old keyboard too: the controls the file does not
+ * list keep their default letters, moved the same way. A player with no key
+ * lines, or with lines by position, has the built-in defaults by position. */
 
 /* One setting for every player (the launcher's environment overrides use
  * the same keys as [all]). Returns 0 or -1 for an unknown key or value. */

@@ -17,7 +17,11 @@
 
 /* ---------- the stack ---------- */
 .stack-wrap { position: relative; min-height: 0; overflow: hidden auto; padding: .6rem 1.2rem 2rem 2.2rem; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-.beam { position: absolute; left: 1.1rem; top: 0; bottom: 0; width: 2px; pointer-events: none;
+/* overflow-y: clip keeps the travelling light (.beam-flow, moved far below by a
+   transform) out of the list's scroll area: without it the list grew a scroll
+   bar each time the light passed its bottom edge. clip, not hidden, so the
+   light's glow stays visible beside the 2px beam. */
+.beam { position: absolute; left: 1.1rem; top: 0; bottom: 0; width: 2px; pointer-events: none; overflow-x: visible; overflow-y: clip;
   background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--art-1) 70%, transparent) 6%, color-mix(in srgb, var(--art-2) 60%, transparent) 70%, transparent);
   box-shadow: 0 0 .9rem color-mix(in srgb, var(--art-1) 50%, transparent); opacity: .85;
   transition: opacity var(--t-slow) var(--ease), filter var(--t-slow) var(--ease); }
@@ -133,6 +137,8 @@
 .files .f-lost { color: var(--art-3); }
 .files .f-unused { color: var(--text-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-3) 60%, transparent); }
 .files .f-note { font-family: var(--font); font-size: .78rem; }
+/* A picture the game drew at its last start: the note takes the beam's light, dimly. */
+.files .f-drawn { color: color-mix(in srgb, var(--art-2) 75%, var(--text-2)); }
 .readme { font-size: .86rem; line-height: 1.5; color: var(--text-2); max-height: 11rem; overflow: auto; padding-right: .4rem; scrollbar-width: thin; }
 .readme h4 { color: var(--text); font-size: .92rem; margin: .5rem 0 .15rem; }
 .readme p { margin: .25rem 0; }

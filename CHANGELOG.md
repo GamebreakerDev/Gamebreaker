@@ -5,6 +5,30 @@ What changes for a player in each release, newest first. The format follows
 
 ## Unreleased
 
+## 0.1.2 - 2026-11-22
+
+- Fixed: in 0.1.1 a controller was not read at all unless "Four-player
+  controllers" was on in the launcher's Settings, Controls, and it did not
+  rumble. Controllers work again with that setting off, as in 0.1.0.
+- Fixed: the Mods page's list no longer shows a scroll bar that comes and goes
+  by itself.
+- Fixed: on the Updates page the version and Check now no longer jump into
+  place after the page opens.
+- A mod made only of pictures no longer says "0 files" on the Mods page.
+- The game now opens in a window by default; Fullscreen is in Settings,
+  Display. If you chose Fullscreen yourself before, it stays.
+- The launcher's Mods page marks each picture the game drew at its last start,
+  and counts them on the mod's plate.
+- Keyboard keys go by their place on the keyboard, not the letter printed on
+  them, so the default keys sit in the same places on French, German and other
+  layouts. The Keyboard page shows your own keyboard's labels. Keys you changed
+  before stay on the same keys.
+- The Keyboard page tells left and right Shift and Ctrl apart, and Esc can now
+  be given to a button (click elsewhere to cancel a change).
+- While the game is in front, Windows' Sticky Keys shortcut (Shift pressed five
+  times) is switched off, so a turbo on Shift cannot open its box; it comes back
+  when you leave the game. Sticky Keys itself, if you use it, is left alone.
+
 ## 0.1.1 - 2026-11-21
 
 - New default keyboard layout, made for playing: W A S D move; K pass, L

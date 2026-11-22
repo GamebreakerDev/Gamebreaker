@@ -14,7 +14,7 @@ compiles it on your PC, from your own disc.
 Xbox release.
 
 <p align="center">
-  <a href="https://github.com/GamebreakerDev/Gamebreaker/releases/download/v0.1.1/Gamebreaker-0.1.1.zip"><img src="docs/art/download.svg" alt="Download Gamebreaker 0.1.1 (zip)" width="220"></a>
+  <a href="https://github.com/GamebreakerDev/Gamebreaker/releases/download/v0.1.2/Gamebreaker-0.1.2.zip"><img src="docs/art/download.svg" alt="Download Gamebreaker 0.1.2 (zip)" width="220"></a>
 </p>
 
 <p align="center">
@@ -56,7 +56,7 @@ Every game mode and all eleven courts are here, at the game's original speed.
   <img src="https://github.com/GamebreakerDev/Gamebreaker/releases/download/media-1/menu-page.jpg" alt="Create A Baller, choosing hair" width="49%">
 </p>
 
-Play in borderless fullscreen or a window, at up to four times the original
+Play in a window or borderless fullscreen, at up to four times the original
 resolution, with texture filtering and anti-aliasing. The 16:10, 16:9, 21:9 and
 32:9 shapes show more of the court at the sides. 120 frames a second is available
 as an experimental option.
@@ -69,7 +69,8 @@ as an experimental option.
 
 <img src="https://github.com/GamebreakerDev/Gamebreaker/releases/download/media-1/wide-page.jpg" alt="A 21:9 match at Mosswood in daylight, with a dunk in progress" width="100%">
 
-Xbox-type controllers work with rumble, and every keyboard key can be changed.
+Xbox-type controllers work with rumble, and every keyboard key can be changed;
+keys go by their place, so the defaults sit in the same spots on any layout.
 Music, effects, crowd, voices and commentary have separate volumes. The game's
 twelve cheats are switches in the launcher, the last five versions of your save
 are kept as backups, and F12 takes a screenshot.
@@ -100,7 +101,9 @@ page: [Using mods](docs/MODS.md) and [Making a mod](docs/MODDING.md).
 | Enter | START (pause) |
 | Esc, Backspace | BACK |
 
-Every key can be changed in the launcher, Settings, Keyboard.
+Keys go by their place: on a French or German keyboard the same keys do the
+same things, whatever is printed on them. Every key can be changed in the
+launcher, Settings, Keyboard.
 
 </details>
 

@@ -6,12 +6,16 @@
  * player would; the port never writes the game's own state, so a click can
  * only lead somewhere a controller can reach.
  *
- *   Known screens   the Main Menu and Play It. Pointing at an item moves
- *                   the highlight to it (hover), a left click moves the
- *                   highlight there and presses A, the wheel moves it up
- *                   and down. A click outside every item does nothing.
- *   Other screens   with no 3D scene (the title, every other menu): the
- *                   wheel is the D-pad's up and down, a left click is A.
+ *   Lists           any menu drawn as one column of items, one of them
+ *                   highlighted (the Main Menu, Play It, My Team, Inside
+ *                   Vol. 2 and its sub-menus, Game Data, the Yes/No boxes):
+ *                   pointing at an item moves the highlight to it (hover),
+ *                   a left click moves the highlight there and presses A,
+ *                   the wheel moves it up and down. A click outside every
+ *                   item does nothing.
+ *   Other screens   with no 3D scene (the title, grids, option rows, card
+ *                   lists): the wheel is the D-pad's up and down, a left
+ *                   click is A.
  *   Everywhere      a right click is B (back), as Esc and Backspace are.
  *   In a match      (any frame with a 3D scene: the court, the pause menu
  *                   over it) the mouse does nothing and the pointer is
@@ -21,24 +25,26 @@
  *                   until the mouse moves again, in a window and in
  *                   fullscreen alike.
  *
- * How the port knows where things are. The disc's layout pack
- * (game_files\fe\xlay_fe.bin, the player's own file: nothing is shipped)
- * gives each screen's items: their point on the 640x480 menu screen and
- * which item is above and below. The game keeps no plain "highlighted item"
- * value in its memory that the port can read (memory snapshots taken with
- * the highlight on different items show none, and the layouts are freed once
- * a screen is built), so the port reads what is drawn: each frame the
- * Direct3D 11 back end hands over the small flat quads of the menu (the
- * labels' letters, and the star the game draws left of the highlighted
- * label). From them:
- *   - which known screen is up: the rows that have a label match the
- *     layout's items exactly (six rows for the Main Menu, four for Play It);
- *   - which item is highlighted: the row the star is on.
- * A click is then a closed loop: one move, wait until the star has moved
- * to the next row, the next move, and A only once the star sits on the
- * clicked row. If the screen stops being recognised, or the star does not
- * move in time, the rest is dropped (never queued): a click during a
- * transition does nothing.
+ * How the port knows where things are. The game keeps no plain
+ * "highlighted item" value in its memory that the port can read (memory
+ * snapshots taken with the highlight on different items show none, and the
+ * layouts are freed once a screen is built), so the port reads what is
+ * drawn: each frame the Direct3D 11 back end hands over the small flat quads
+ * of the menu (one per letter). Letters on one line, close together, make a
+ * label. A list is a column of labels of one size, aligned on their left
+ * edge or their middle and evenly spaced, of which exactly one is drawn in
+ * the game's highlight gold and the rest in one other colour; a row with a
+ * value beside it (an option row) makes the screen "not a list". The white
+ * stars drawn beside the highlighted label are left out.
+ *
+ * A click is then a closed loop: one move, wait until the gold has moved to
+ * the next row, the next move, and A only once the gold sits on the clicked
+ * row. If the list stops being recognised, or the gold does not move in
+ * time, the rest is dropped (never queued): a click during a transition does
+ * nothing.
+ *
+ * The disc's layout pack (game_files\fe\xlay_fe.bin, the player's own file:
+ * nothing is shipped) only gives the lists their names in the log.
  *
  * Presses go into pad 1 (gb_pad.c merges them in xbox_InputGetState), each
  * held for 50 ms and released for 50 ms so the menu sees every one.
@@ -77,18 +83,15 @@ static double now_ms(void)
     return (double)c.QuadPart * 1000.0 / (double)s_qpf.QuadPart;
 }
 
-/* ── The layouts, read from the player's own disc ─────────────────── */
+/* ── The layouts, read from the player's own disc (names only) ────────── */
 
 #define MAX_LAYOUTS 128
 #define MAX_ITEMS   48
 
-enum { DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT };
-
 typedef struct {
-    int n;                  /* element number (id >> 12): what links name */
+    int n;                  /* element number (id >> 12) */
     int index;              /* tag 0x22: the item's number in its menu */
-    int x, y;               /* tag 0x03: the item's point, top left of its row */
-    int link[4];            /* slot of the item each way, or -1 */
+    int x, y;               /* tag 0x03: the item's point */
 } Item;
 
 typedef struct {
@@ -106,20 +109,18 @@ static uint32_t rd16(const uint8_t *p) { return (uint32_t)(p[0] | p[1] << 8); }
  * u32 offset} (the first is not an element), then per element its
  * properties as {u16 tag, u32 value}. Tag 0x00 the id (element number << 12
  * | type; types 0x0A0 to 0x0AF are items), 0x03 the point (x, y as two
- * u16), 0x22 the item's index, 0x19/0x1A up (kind, target), 0x1B/0x1C down,
- * 0x1D/0x1E left, 0x1F/0x20 right; kind 2 = go to element `target`. */
+ * u16), 0x22 the item's index. Items are kept sorted top to bottom. */
 static void layout_parse(const uint8_t *e, uint32_t size, Layout *L)
 {
     uint32_t cnt, k, j;
-    int nel[MAX_ITEMS], linkn[MAX_ITEMS][4];
     memset(L, 0, sizeof *L);
     if (size < 6)
         return;
     cnt = rd16(e + 4);
     for (k = 0; k < cnt; k++) {
         uint32_t d = 6 + 6 * (k + 1), np, off, id = 0;
-        int ln[4] = { -1, -1, -1, -1 }, lk[4] = { 0, 0, 0, 0 }, d4;
         Item it;
+        int s;
         if (d + 6 > size)
             break;
         np = rd16(e + d);
@@ -130,37 +131,18 @@ static void layout_parse(const uint8_t *e, uint32_t size, Layout *L)
         it.index = -1;
         for (j = 0; j < np; j++) {
             uint32_t t = rd16(e + off + 6 * j), v = rd32(e + off + 6 * j + 2);
-            switch (t) {
-            case 0x00: id = v; break;
-            case 0x03: it.x = (int)(v & 0xFFFF); it.y = (int)(v >> 16); break;
-            case 0x22: it.index = (int)v; break;
-            case 0x19: lk[DIR_UP] = (int)v; break;
-            case 0x1a: ln[DIR_UP] = (int)v; break;
-            case 0x1b: lk[DIR_DOWN] = (int)v; break;
-            case 0x1c: ln[DIR_DOWN] = (int)v; break;
-            case 0x1d: lk[DIR_LEFT] = (int)v; break;
-            case 0x1e: ln[DIR_LEFT] = (int)v; break;
-            case 0x1f: lk[DIR_RIGHT] = (int)v; break;
-            case 0x20: ln[DIR_RIGHT] = (int)v; break;
-            }
+            if (t == 0x00) id = v;
+            else if (t == 0x03) { it.x = (int)(v & 0xFFFF); it.y = (int)(v >> 16); }
+            else if (t == 0x22) it.index = (int)v;
         }
         if ((id & 0xFF0) != 0x0A0 || it.index < 0 || L->nitems >= MAX_ITEMS)
             continue;
         it.n = (int)(id >> 12);
-        nel[L->nitems] = it.n;
-        for (d4 = 0; d4 < 4; d4++) {
-            linkn[L->nitems][d4] = lk[d4] == 2 ? ln[d4] : -1;
-            it.link[d4] = -1;
-        }
-        L->it[L->nitems++] = it;
+        for (s = L->nitems; s > 0 && L->it[s - 1].y > it.y; s--)
+            L->it[s] = L->it[s - 1];
+        L->it[s] = it;
+        L->nitems++;
     }
-    for (k = 0; k < (uint32_t)L->nitems; k++)
-        for (j = 0; j < 4; j++) {
-            int s;
-            for (s = 0; s < L->nitems; s++)
-                if (linkn[k][j] >= 0 && nel[s] == linkn[k][j])
-                    L->it[k].link[j] = s;
-        }
 }
 
 /* The layout pack: C0FB, big-endian u16 header size, u16 count, then per
@@ -204,100 +186,54 @@ static int pack_parse(const char *path)
     return (int)k;
 }
 
-/* ── Known screens ─────────────────────────────────────────────────── */
-
-/* A screen the port knows: a layout whose items form one column, each
- * item's row running from its point down to the next item's (44 pixels on
- * both screens). The label starts at the item's x, to the right of the
- * star. */
-typedef struct {
-    const char *name;
-    int layout;             /* entry in fe\xlay_fe.bin */
-    int nrows;              /* items, top to bottom */
-    int x, y[8];            /* the column's x; each row's top */
-    int row_h;
-    int index[8];           /* the item's index (tag 0x22), per row */
-} Screen;
-
-static Screen s_screens[] = {
-    { "Main Menu", 0 },
-    { "Play It",   2 },
+/* Names for the log, by the layout whose items sit where the list's rows
+ * are drawn (each list draws its labels a fixed distance from its items'
+ * points). */
+static const struct { int layout; const char *name; int hides; } s_names[] = {
+    { 0, "Main Menu", 0 }, { 2, "Play It", 0 }, { 1, "My Team", 0 },
+    { 57, "Inside Vol. 2", 0 }, { 55, "Game Data", 1 },   /* hides: shows only the top of its items */
 };
-#define NSCREENS ((int)(sizeof s_screens / sizeof s_screens[0]))
-
-#define LABEL_W     230     /* hit box: from the star's left to past the longest label */
-#define STAR_LEFT   26      /* the star sits up to this far left of the item's x */
-
-/* Sort the layout's items into rows. Only a single column whose items link
- * up and down to their neighbours is taken; anything else is left unknown. */
-static void screens_build(void)
-{
-    int s;
-    for (s = 0; s < NSCREENS; s++) {
-        Screen *S = &s_screens[s];
-        const Layout *L = &s_layouts[S->layout];
-        int order[8], i, j, n = L->nitems, ok = n >= 2 && n <= 8;
-        S->nrows = 0;
-        for (i = 0; ok && i < n; i++) {
-            order[i] = i;
-            if (L->it[i].x != L->it[0].x)
-                ok = 0;
-        }
-        for (i = 0; ok && i < n; i++)
-            for (j = i + 1; j < n; j++)
-                if (L->it[order[j]].y < L->it[order[i]].y) {
-                    int t = order[i]; order[i] = order[j]; order[j] = t;
-                }
-        for (i = 0; ok && i + 1 < n; i++)
-            if (L->it[order[i]].link[DIR_DOWN] != order[i + 1]
-                || L->it[order[i + 1]].link[DIR_UP] != order[i])
-                ok = 0;
-        if (!ok) {
-            gb_log("[MOUSE] %s: layout %d is not the column expected; screen not known\n",
-                   S->name, S->layout);
-            continue;
-        }
-        S->x = L->it[0].x;
-        for (i = 0; i < n; i++) {
-            S->y[i] = L->it[order[i]].y;
-            S->index[i] = L->it[order[i]].index;
-        }
-        S->row_h = S->y[1] - S->y[0];
-        S->nrows = n;
-    }
-}
+#define NNAMES ((int)(sizeof s_names / sizeof s_names[0]))
 
 /* ── What the back end saw drawn ───────────────────────────────────── */
 
-/* Per frame: for each 8-pixel band of the menu screen's height, whether a
- * label letter (a small flat quad starting in the label column) was drawn,
- * and the rows the star was seen in. Built on the render thread, published
- * at the end of a frame. */
-#define BANDS 60                         /* 480 / 8 */
+#define MAX_GLYPHS 1536
+#define MAX_LABELS 160
+#define MAX_ROWS   12
+#define HELP_Y     405       /* the help line along the bottom of every menu */
+#define TITLE_Y    90        /* the screen's title above the panel */
+
+typedef struct { short x0, y0, x1, y1; uint32_t rgb; } Glyph;
+
+/* Built on the render thread during a frame. */
+static Glyph s_g[MAX_GLYPHS];
+static int s_ng;
 
 typedef struct {
     uint32_t seq;
     int scene3d;                         /* the frame drew 3D */
-    int screen;                          /* known screen recognised, or -1 */
-    int star_row;                        /* the row the star is on, or -1 */
+    int screen;                          /* the list's signature, or -1: no list */
+    int hl;                              /* the highlighted row, or -1 */
+    int nrows;
+    int row_top[MAX_ROWS], row_bot[MAX_ROWS];   /* each row's hit band, 640x480 menu screen */
+    int left, right;                     /* the rows' hit band across */
+    int title;                           /* the title screen (Press START) */
+    char name[48];
     double at;                           /* when it was published */
 } Seen;
 
 static CRITICAL_SECTION s_lock;
 static Seen s_seen;                      /* the latest frame's, under s_lock */
 
-static uint8_t s_text[BANDS];            /* building: label letters per band, per known column x */
-static uint8_t s_star[BANDS];            /* building: star quads per band */
-static int s_col_x = -1;                 /* the column all known screens share, or -1 */
+typedef struct { float x, y, z, rhw; uint32_t diffuse; } VertexHead;   /* the start of Nv2aVertex */
 
-typedef struct { float x, y, z, rhw; } VertexHead;   /* the start of Nv2aVertex */
 
 void gb_mouse_note_batch(const void *vertices, uint32_t count, uint32_t stride,
                          uint32_t surf_w, uint32_t surf_h, uint32_t aa_x, uint32_t aa_y)
 {
     uint32_t i, k;
     float sx, sy;
-    if (!s_on || s_col_x < 0 || !count || !surf_w || !surf_h || !aa_x || !aa_y)
+    if (!s_on || !count || !surf_w || !surf_h || !aa_x || !aa_y)
         return;
     /* only the screen (640x480 as the game sees it, in real pixels with its
      * anti-aliasing factor); other surfaces are textures */
@@ -310,7 +246,8 @@ void gb_mouse_note_batch(const void *vertices, uint32_t count, uint32_t stride,
             return;                      /* 3D: not a menu */
     for (i = 0; i + 2 < count; i += 3) {
         float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, w, h;
-        int b0, b1;
+        uint32_t rgb = ((const VertexHead *)((const uint8_t *)vertices + (size_t)i * stride))->diffuse & 0xFFFFFFu;
+        Glyph *g;
         for (k = 0; k < 3; k++) {
             const VertexHead *v = (const VertexHead *)((const uint8_t *)vertices + (size_t)(i + k) * stride);
             float x = v->x * sx, y = v->y * sy;
@@ -321,69 +258,242 @@ void gb_mouse_note_batch(const void *vertices, uint32_t count, uint32_t stride,
         }
         w = x1 - x0;
         h = y1 - y0;
-        if (w <= 0.0f || h <= 0.0f || w > 40.0f || h > 40.0f || y0 < 0.0f || y1 >= 480.0f)
-            continue;                    /* not a letter or a star */
-        b0 = (int)(y0 / 8.0f);
-        b1 = (int)(y1 / 8.0f);
-        if (b1 >= BANDS) b1 = BANDS - 1;
-        if (x1 <= (float)s_col_x + 2.0f && x0 >= (float)(s_col_x - STAR_LEFT)) {
-            for (k = (uint32_t)b0; k <= (uint32_t)b1; k++)
-                if (s_star[k] < 255) s_star[k]++;
-        } else if (x0 >= (float)s_col_x - 2.0f && x0 <= (float)(s_col_x + LABEL_W)) {
-            for (k = (uint32_t)b0; k <= (uint32_t)b1; k++)
-                if (s_text[k] < 255) s_text[k]++;
+        if (w < 2.0f || h < 8.0f || w > 40.0f || h > 40.0f || y0 < (float)TITLE_Y || y1 > (float)HELP_Y
+            || x0 < 0.0f || x1 > 640.0f)
+            continue;                    /* not a letter of a list */
+        if (rgb == 0xFFFFFFu || rgb == 0)
+            continue;                    /* the white stars beside the highlight; drop shadows */
+        if (s_ng > 0) {                  /* the quad's second triangle */
+            g = &s_g[s_ng - 1];
+            if (g->x0 == (short)x0 && g->y0 == (short)y0 && g->x1 == (short)x1 && g->y1 == (short)y1)
+                continue;
         }
+        if (s_ng >= MAX_GLYPHS)
+            continue;
+        g = &s_g[s_ng++];
+        g->x0 = (short)x0;
+        g->y0 = (short)y0;
+        g->x1 = (short)x1;
+        g->y1 = (short)y1;
+        g->rgb = rgb;
     }
 }
 
-/* A row "has a label" when letters were drawn in its upper half (the
- * labels' height is about half the row). */
-static int row_has(const uint8_t *bands, int top, int h)
+/* The game's highlight gold (FB AC 00; its alpha pulses). */
+static int is_gold(uint32_t c)
 {
-    int b0 = (top + 2) / 8, b1 = (top + h / 2) / 8, b, n = 0;
-    for (b = b0; b <= b1 && b < BANDS; b++)
-        n += bands[b];
-    return n >= 2;
+    int r = (int)(c >> 16 & 255), g = (int)(c >> 8 & 255), b = (int)(c & 255);
+    return r >= 0xE0 && g >= 0x90 && g <= 0xC8 && b <= 0x40;
+}
+
+static int same_rgb(uint32_t a, uint32_t b)
+{
+    int s;
+    for (s = 0; s < 24; s += 8) {
+        int d = (int)(a >> s & 255) - (int)(b >> s & 255);
+        if (d < -16 || d > 16)
+            return 0;
+    }
+    return 1;
+}
+
+typedef struct { int x0, y0, x1, y1, h, n; uint32_t rgb; } Label;
+
+static int cmp_glyph_y(const void *a, const void *b)
+{
+    const Glyph *p = (const Glyph *)a, *q = (const Glyph *)b;
+    return p->y0 != q->y0 ? p->y0 - q->y0 : p->x0 - q->x0;
+}
+
+/* Letters into labels: a line is letters whose tops are within 10 pixels of
+ * the line's first (capitals and small letters of one label); along a line
+ * a gap of more than 40 pixels starts another label (word gaps are under
+ * 15). A label's colour is its letters' most common one. */
+static int make_labels(Glyph *g, int ng, Label *lab)
+{
+    int nl = 0, a = 0;
+    qsort(g, (size_t)ng, sizeof *g, cmp_glyph_y);
+    while (a < ng) {
+        int b = a + 1, i, j;
+        while (b < ng && g[b].y0 <= g[a].y0 + 10)
+            b++;
+        for (i = a + 1; i < b; i++) {        /* the line, by x */
+            Glyph t = g[i];
+            for (j = i; j > a && g[j - 1].x0 > t.x0; j--)
+                g[j] = g[j - 1];
+            g[j] = t;
+        }
+        for (i = a; i < b && nl < MAX_LABELS; ) {
+            Label *L = &lab[nl++];
+            int k, best = 0;
+            L->x0 = g[i].x0; L->y0 = g[i].y0; L->x1 = g[i].x1; L->y1 = g[i].y1;
+            L->h = g[i].y1 - g[i].y0;
+            L->rgb = g[i].rgb;
+            for (j = i + 1; j < b && g[j].x0 <= L->x1 + 40; j++) {
+                if (g[j].x1 > L->x1) L->x1 = g[j].x1;
+                if (g[j].y0 < L->y0) L->y0 = g[j].y0;
+                if (g[j].y1 > L->y1) L->y1 = g[j].y1;
+                if (g[j].y1 - g[j].y0 > L->h) L->h = g[j].y1 - g[j].y0;
+            }
+            L->n = j - i;
+            for (k = i; k < j; k++) {
+                int c = 0, m;
+                for (m = i; m < j; m++)
+                    c += g[m].rgb == g[k].rgb;
+                if (c > best) { best = c; L->rgb = g[k].rgb; }
+            }
+            i = j;
+        }
+        a = b;
+    }
+    return nl;
+}
+
+/* Finds a list among the labels; fills out's rows, returns 1 if found. */
+static int find_list(const Label *lab, int nl, Seen *out)
+{
+    int hi = -1, i, j, mode, nm = 0, h, gap = 0, top, bot, r, mx0, mx1;
+    int mem[MAX_LABELS], run[MAX_ROWS], nrun;
+    uint32_t normal = 0;
+    int have_normal = 0;
+    for (i = 0; i < nl; i++)
+        if (lab[i].n >= 2 && is_gold(lab[i].rgb)) {
+            if (hi >= 0)
+                return 0;                /* two gold labels: not a list (an option row and its value) */
+            hi = i;
+        }
+    if (hi < 0)
+        return 0;
+    /* aligned with the gold one on the left edge, else in the middle */
+    for (mode = 0; mode < 2 && nm == 0; mode++)
+        for (i = 0; i < nl; i++) {
+            const Label *L = &lab[i];
+            int d = mode == 0 ? L->x0 - lab[hi].x0 : (L->x0 + L->x1) - (lab[hi].x0 + lab[hi].x1);
+            if (i == hi || L->n < 2 || is_gold(L->rgb) || L->h - lab[hi].h > 5 || lab[hi].h - L->h > 5)
+                continue;
+            if (d >= -(mode == 0 ? 4 : 8) && d <= (mode == 0 ? 4 : 8))
+                mem[nm++] = i;
+        }
+    mode--;
+    if (nm == 0)
+        return 0;
+    mem[nm++] = hi;
+    for (i = 1; i < nm; i++) {           /* by height on the screen */
+        int t = mem[i];
+        for (j = i; j > 0 && lab[mem[j - 1]].y0 > lab[t].y0; j--)
+            mem[j] = mem[j - 1];
+        mem[j] = t;
+    }
+    for (h = 0; mem[h] != hi; h++)
+        ;
+    /* the evenly spaced run of one colour around the gold label */
+    top = bot = h;
+    for (j = h + 1; j < nm; j++) {
+        int g = lab[mem[j]].y0 - lab[mem[j - 1]].y0;
+        if (g < 18 || g > 64 || (gap && (g - gap > 6 || gap - g > 6)))
+            break;
+        if (have_normal && !same_rgb(lab[mem[j]].rgb, normal))
+            break;
+        if (!gap) gap = g;
+        if (!have_normal) { normal = lab[mem[j]].rgb; have_normal = 1; }
+        bot = j;
+    }
+    for (j = h - 1; j >= 0; j--) {
+        int g = lab[mem[j + 1]].y0 - lab[mem[j]].y0;
+        if (g < 18 || g > 64 || (gap && (g - gap > 6 || gap - g > 6)))
+            break;
+        if (have_normal && !same_rgb(lab[mem[j]].rgb, normal))
+            break;
+        if (!gap) gap = g;
+        if (!have_normal) { normal = lab[mem[j]].rgb; have_normal = 1; }
+        top = j;
+    }
+    nrun = bot - top + 1;
+    if (nrun < 2 || nrun > MAX_ROWS)
+        return 0;
+    for (r = 0; r < nrun; r++)
+        run[r] = mem[top + r];
+    /* a row with something else on its line, to its right, is an option row
+     * (its value): not a plain list; a row of more than 30 letters is a
+     * sentence (the title screen's copyright line under Press START), not
+     * an item */
+    for (r = 0; r < nrun; r++) {
+        const Label *R = &lab[run[r]];
+        if (R->n > 30) {
+            /* gold "Press START" over the copyright line: the title screen */
+            out->title = run[r] != hi;
+            return 0;
+        }
+        for (i = 0; i < nl; i++)
+            if (lab[i].x0 > R->x1 + 30 && lab[i].y0 - R->y0 <= 10 && R->y0 - lab[i].y0 <= 10)
+                return 0;
+    }
+    mx0 = 640; mx1 = 0;
+    for (r = 0; r < nrun; r++) {
+        const Label *R = &lab[run[r]];
+        int c = (R->y0 + R->y1) / 2;
+        out->row_top[r] = c - gap / 2;
+        out->row_bot[r] = c - gap / 2 + gap;
+        if (R->x0 < mx0) mx0 = R->x0;
+        if (R->x1 > mx1) mx1 = R->x1;
+        if (run[r] == hi)
+            out->hl = r;
+    }
+    out->nrows = nrun;
+    out->left = mx0 - 30;                /* the stars sit up to 24 pixels out */
+    out->right = mx1 + 30;
+    /* the same list whatever is highlighted: rows, first row, alignment */
+    out->screen = ((nrun * 631 + lab[run[0]].y0) * 1031
+                   + (mode == 0 ? mx0 : (lab[run[0]].x0 + lab[run[0]].x1) / 2)) * 2 + mode;
+    if (out->screen < 0)
+        out->screen = -out->screen;
+    /* its name, from the layout whose items sit at the rows */
+    snprintf(out->name, sizeof out->name, mode == 0 ? "a list of %d rows" : "a box of %d rows", nrun);
+    /* all of a layout's items first, then the top of one (screens that hide
+     * their last items) */
+    for (i = 0; mode == 0 && i < 2 * NNAMES; i++) {
+        int pass = i / NNAMES, k = i % NNAMES;
+        const Layout *L = &s_layouts[s_names[k].layout];
+        int off, ok;
+        if (pass == 0 ? L->nitems != nrun : L->nitems <= nrun || !s_names[k].hides)
+            continue;
+        if (mx0 - L->it[0].x > 6 || L->it[0].x - mx0 > 6)
+            continue;
+        off = lab[run[0]].y0 - L->it[0].y;
+        ok = off >= -24 && off <= 16;
+        for (r = 1; ok && r < nrun; r++) {
+            int d = lab[run[r]].y0 - L->it[r].y - off;
+            ok = d >= -3 && d <= 3;
+        }
+        if (ok) {
+            snprintf(out->name, sizeof out->name, "%s", s_names[k].name);
+            break;
+        }
+    }
+    return 1;
 }
 
 void gb_mouse_frame_end(int scene3d)
 {
+    static Label lab[MAX_LABELS];
     Seen now;
-    int s, r;
+    int nl;
     if (!s_on)
         return;
     memset(&now, 0, sizeof now);
     now.scene3d = scene3d;
     now.screen = -1;
-    now.star_row = -1;
-    if (!scene3d && s_col_x >= 0) {
-        for (s = 0; s < NSCREENS; s++) {
-            const Screen *S = &s_screens[s];
-            int ok = S->nrows > 0, star = -1, stars = 0;
-            for (r = 0; ok && r < S->nrows; r++)
-                if (!row_has(s_text, S->y[r], S->row_h))
-                    ok = 0;
-            /* the row below the last must be empty, so six rows are not
-             * taken for four; not down at the help line (y 420), which
-             * every menu has */
-            if (ok && S->y[S->nrows - 1] + S->row_h + S->row_h / 2 < 410
-                && row_has(s_text, S->y[S->nrows - 1] + S->row_h, S->row_h))
-                ok = 0;
-            if (!ok)
-                continue;
-            for (r = 0; r < S->nrows; r++)
-                if (row_has(s_star, S->y[r], S->row_h)) {
-                    star = r;
-                    stars++;
-                }
-            now.screen = s;
-            now.star_row = stars == 1 ? star : -1;
-            break;
+    now.hl = -1;
+    if (!scene3d) {
+        nl = make_labels(s_g, s_ng, lab);
+        if (!find_list(lab, nl, &now)) {
+            now.screen = -1;
+            now.hl = -1;
+            now.nrows = 0;
         }
     }
     now.at = now_ms();
-    memset(s_text, 0, sizeof s_text);
-    memset(s_star, 0, sizeof s_star);
+    s_ng = 0;
     EnterCriticalSection(&s_lock);
     now.seq = s_seen.seq + 1;
     s_seen = now;
@@ -516,13 +626,14 @@ void gb_mouse_other_input(void)
 #define BTN_DOWN  0x0002
 #define BTN_A     0x1000                 /* not a real bit: the A analog button */
 #define BTN_B     0x2000                 /* the B analog button */
+#define BTN_START 0x0010                 /* XBOX_GAMEPAD_START */
 #define HOLD_MS   50.0
 #define GAP_MS    50.0
-#define STAR_WAIT_MS 500.0               /* a move the star has not followed by then: drop the rest */
+#define HL_WAIT_MS 500.0                 /* a move the highlight has not followed by then: drop the rest */
 #define STEADY_MS 400.0                  /* a screen must be what it is this long to take a click */
 #define AFTER_AB_MS 600.0                /* and this long after the mouse's own A or B */
 
-typedef enum { IDLE, HOLDING, GAP, WAIT_STAR } Phase;
+typedef enum { IDLE, HOLDING, GAP, WAIT_HL } Phase;
 
 static struct {
     Phase phase;
@@ -530,8 +641,8 @@ static struct {
     double since;
     int target_row;                      /* the row a move sequence goes to, or -1 */
     int then_a;                          /* press A once there */
-    int screen;                          /* the screen the sequence was made for */
-    int from_row;                        /* the star's row when the move was sent */
+    int screen;                          /* the list the sequence was made for */
+    int from_row;                        /* the highlight's row when the move was sent */
     double screen_since;                 /* the current recognition started */
     int screen_last;                     /* what the screen was at the last poll */
     double hover_served;                 /* the movement hover last acted on */
@@ -554,16 +665,25 @@ static void drop_sequence(const char *why)
     P.then_a = 0;
 }
 
-/* The row of known screen S under a point, or -1 (outside every item). */
-static int row_at(const Screen *S, float gx, float gy)
+/* The row of the list under a point, or -1 (outside every item). */
+static int row_at(const Seen *S, float gx, float gy)
 {
     int r;
-    if (gx < (float)(S->x - STAR_LEFT) || gx >= (float)(S->x + LABEL_W))
+    if (gx < (float)S->left || gx >= (float)S->right)
         return -1;
     for (r = 0; r < S->nrows; r++)
-        if (gy >= (float)(S->y[r] - 4) && gy < (float)(S->y[r] - 4 + S->row_h))
+        if (gy >= (float)S->row_top[r] && gy < (float)S->row_bot[r])
             return r;
     return -1;
+}
+
+static void start_move(const Seen *S, int r, int then_a, double t)
+{
+    P.screen = S->screen;
+    P.target_row = r;
+    P.then_a = then_a;
+    P.from_row = S->hl;
+    start_press(S->hl < r ? BTN_DOWN : BTN_UP, t);
 }
 
 /* Called from xbox_InputGetState for pad 1 on every poll. Adds the button
@@ -585,8 +705,8 @@ int gb_mouse_pad(uint16_t *buttons, uint8_t *analog_a, uint8_t *analog_b)
     LeaveCriticalSection(&s_lock);
     InterlockedExchange(&s_in_scene, seen.scene3d);
 
-    /* How long the current screen has been what it is (a known screen, an
-     * unknown one, a 3D scene). A click before it is steady is dropped. */
+    /* How long the current screen has been what it is (a list, a screen
+     * with none, a 3D scene). A click before it is steady is dropped. */
     {
         int id = seen.scene3d ? -3 : seen.screen;
         if (id != P.screen_last) {
@@ -605,20 +725,20 @@ int gb_mouse_pad(uint16_t *buttons, uint8_t *analog_a, uint8_t *analog_b)
     case GAP:
         if (t - P.since >= GAP_MS) {
             if ((P.button == BTN_UP || P.button == BTN_DOWN) && P.target_row >= 0) {
-                P.phase = WAIT_STAR;
+                P.phase = WAIT_HL;
                 P.since = t;
             } else {
                 P.phase = IDLE;
             }
         }
         break;
-    case WAIT_STAR:
+    case WAIT_HL:
         if (seen.screen != P.screen || seen.scene3d) {
             drop_sequence("the screen changed");
             P.phase = IDLE;
-        } else if (seen.star_row >= 0 && seen.star_row != P.from_row && seen.at > P.since) {
+        } else if (seen.hl >= 0 && seen.hl != P.from_row && seen.at > P.since) {
             P.phase = IDLE;              /* the move landed: next step below */
-        } else if (t - P.since > STAR_WAIT_MS) {
+        } else if (t - P.since > HL_WAIT_MS) {
             drop_sequence("the highlight did not follow");
             P.phase = IDLE;
         }
@@ -629,13 +749,12 @@ int gb_mouse_pad(uint16_t *buttons, uint8_t *analog_a, uint8_t *analog_b)
 
     {
         int steady = t - P.screen_since >= STEADY_MS && t - P.ab_at >= AFTER_AB_MS;
-        int known = seen.screen >= 0 && !seen.scene3d && seen.star_row >= 0;
-        const Screen *S = known ? &s_screens[seen.screen] : NULL;
+        const Seen *S = seen.screen >= 0 && !seen.scene3d && seen.hl >= 0 ? &seen : NULL;
         int busy = P.phase != IDLE;
         int r;
 
-        /* A left click on a known screen while a move is under way for the
-         * same screen: the move goes on to the clicked row instead. */
+        /* A left click on the list while a move is under way on it: the
+         * move goes on to the clicked row instead. */
         if (S && mo.clicks_l > 0 && P.target_row >= 0 && P.screen == seen.screen && steady
             && mo.click_in && (r = row_at(S, mo.click_gx, mo.click_gy)) >= 0) {
             P.target_row = r;
@@ -647,15 +766,15 @@ int gb_mouse_pad(uint16_t *buttons, uint8_t *analog_a, uint8_t *analog_b)
         if (!busy && P.target_row >= 0) {
             if (!S || seen.screen != P.screen) {
                 drop_sequence("the screen changed");
-            } else if (seen.star_row == P.target_row) {
+            } else if (seen.hl == P.target_row) {
                 int a = P.then_a;
                 P.target_row = -1;
                 P.then_a = 0;
                 if (a)
                     start_press(BTN_A, t);
             } else {
-                P.from_row = seen.star_row;
-                start_press(seen.star_row < P.target_row ? BTN_DOWN : BTN_UP, t);
+                P.from_row = seen.hl;
+                start_press(seen.hl < P.target_row ? BTN_DOWN : BTN_UP, t);
             }
             busy = P.phase != IDLE;
         }
@@ -668,45 +787,30 @@ int gb_mouse_pad(uint16_t *buttons, uint8_t *analog_a, uint8_t *analog_b)
             start_press(BTN_B, t);
         } else if (S && mo.clicks_l > 0) {
             r = mo.click_in ? row_at(S, mo.click_gx, mo.click_gy) : -1;
-            if (r >= 0 && seen.star_row == r) {
+            if (r >= 0 && seen.hl == r)
                 start_press(BTN_A, t);
-            } else if (r >= 0) {
-                P.screen = seen.screen;
-                P.target_row = r;
-                P.then_a = 1;
-                P.from_row = seen.star_row;
-                start_press(seen.star_row < r ? BTN_DOWN : BTN_UP, t);
-            }
+            else if (r >= 0)
+                start_move(S, r, 1, t);
             /* outside every item: nothing */
         } else if (S && mo.wheel != 0) {
-            r = seen.star_row - mo.wheel;   /* wheel up (positive) moves up */
+            r = seen.hl - mo.wheel;      /* wheel up (positive) moves up */
             if (r < 0) r = 0;
             if (r >= S->nrows) r = S->nrows - 1;
-            if (r != seen.star_row) {
-                P.screen = seen.screen;
-                P.target_row = r;
-                P.then_a = 0;
-                P.from_row = seen.star_row;
-                start_press(seen.star_row < r ? BTN_DOWN : BTN_UP, t);
-            }
+            if (r != seen.hl)
+                start_move(S, r, 0, t);
         } else if (S && mo.has_point && !s_pointer_hidden && mo.moved_at > P.screen_since
                    && mo.moved_at > P.hover_served && t - mo.moved_at >= 60.0) {
-            /* hover: the pointer has moved on this screen and come to rest
+            /* hover: the pointer has moved on this list and come to rest
              * over an item: the highlight goes there. Once per movement, so
              * a controller or key press afterwards is never undone. */
             P.hover_served = mo.moved_at;
             r = row_at(S, mo.gx, mo.gy);
-            if (r >= 0 && r != seen.star_row) {
-                P.screen = seen.screen;
-                P.target_row = r;
-                P.then_a = 0;
-                P.from_row = seen.star_row;
-                start_press(seen.star_row < r ? BTN_DOWN : BTN_UP, t);
-            }
+            if (r >= 0 && r != seen.hl)
+                start_move(S, r, 0, t);
         } else if (!S && seen.screen < 0) {
-            /* a screen the port does not know: the coarse mouse */
+            /* a screen with no list: the coarse mouse */
             if (mo.clicks_l > 0 && mo.click_in)
-                start_press(BTN_A, t);
+                start_press(seen.title ? BTN_START : BTN_A, t);   /* A does not leave the title */
             else if (mo.wheel > 0)
                 start_press(BTN_UP, t);
             else if (mo.wheel < 0)
@@ -721,7 +825,6 @@ int gb_mouse_pad(uint16_t *buttons, uint8_t *analog_a, uint8_t *analog_b)
             *analog_b = 255;
         else
             *buttons |= (uint16_t)P.button;
-        return 1;
     }
     return 1;
 }
@@ -729,30 +832,18 @@ int gb_mouse_pad(uint16_t *buttons, uint8_t *analog_a, uint8_t *analog_b)
 /* ── Snapshots of the game's memory (diagnostic builds) ──────────────────────── */
 
 
+
 /* ── Start ─────────────────────────────────────────────────────────── */
 
 void gb_mouse_init(void)
 {
     const char *e = getenv("GB_MOUSE_MENUS");
-    int s;
     QueryPerformanceFrequency(&s_qpf);
     InitializeCriticalSection(&s_lock);
     if (!(e && *e && *e != '0'))
         return;
     s_nlayouts = pack_parse("game_files\\fe\\xlay_fe.bin");
-    if (s_nlayouts <= 0) {
-        gb_log("[MOUSE] mouse in menus: the menu layouts (game_files\\fe\\xlay_fe.bin) could not be read; off\n");
-        return;
-    }
-    screens_build();
-    for (s = 0; s < NSCREENS; s++)
-        if (s_screens[s].nrows > 0) {
-            if (s_col_x < 0)
-                s_col_x = s_screens[s].x;
-            else if (s_col_x != s_screens[s].x)
-                s_screens[s].nrows = 0;      /* one column x is watched */
-        }
     s_on = 1;
-    gb_log("[MOUSE] mouse in menus: on (GB_MOUSE_MENUS); %d layouts read, known screens:%s%s\n",
-           s_nlayouts, s_screens[0].nrows ? " Main Menu" : "", s_screens[1].nrows ? " Play It" : "");
+    gb_log("[MOUSE] mouse in menus: on (GB_MOUSE_MENUS); %d menu layouts read for the lists' names\n",
+           s_nlayouts);
 }

@@ -92,6 +92,69 @@ void gb_pad_config_defaults(GbPadConfig *c)
     c->count = 4;
 }
 
+/* ---- keys by position ---------------------------------------------------- */
+
+/* The typing block of a US keyboard: scan code (set 1) and the virtual key a
+ * US layout gives it. */
+static const struct { uint8_t scan, vk; } k_us_block[] = {
+    { 0x02, '1' }, { 0x03, '2' }, { 0x04, '3' }, { 0x05, '4' }, { 0x06, '5' },
+    { 0x07, '6' }, { 0x08, '7' }, { 0x09, '8' }, { 0x0A, '9' }, { 0x0B, '0' },
+    { 0x0C, XBOX_VK_OEM_MINUS }, { 0x0D, XBOX_VK_OEM_PLUS },
+    { 0x10, 'Q' }, { 0x11, 'W' }, { 0x12, 'E' }, { 0x13, 'R' }, { 0x14, 'T' }, { 0x15, 'Y' },
+    { 0x16, 'U' }, { 0x17, 'I' }, { 0x18, 'O' }, { 0x19, 'P' },
+    { 0x1A, XBOX_VK_OEM_4 }, { 0x1B, XBOX_VK_OEM_6 },
+    { 0x1E, 'A' }, { 0x1F, 'S' }, { 0x20, 'D' }, { 0x21, 'F' }, { 0x22, 'G' }, { 0x23, 'H' },
+    { 0x24, 'J' }, { 0x25, 'K' }, { 0x26, 'L' },
+    { 0x27, XBOX_VK_OEM_1 }, { 0x28, XBOX_VK_OEM_7 }, { 0x29, XBOX_VK_OEM_3 },
+    { 0x2B, XBOX_VK_OEM_5 },
+    { 0x2C, 'Z' }, { 0x2D, 'X' }, { 0x2E, 'C' }, { 0x2F, 'V' }, { 0x30, 'B' }, { 0x31, 'N' },
+    { 0x32, 'M' }, { 0x33, XBOX_VK_OEM_COMMA }, { 0x34, XBOX_VK_OEM_PERIOD }, { 0x35, XBOX_VK_OEM_2 },
+    { 0x56, 0xE2 },   /* VK_OEM_102: the ISO key left of Z (no name in controls.ini) */
+};
+#define US_BLOCK_COUNT (sizeof k_us_block / sizeof k_us_block[0])
+
+int gb_keys_pos_vk(unsigned scan, int extended)
+{
+    size_t i;
+    if (extended)
+        return 0;        /* keypad / and the like: their own codes, same on every layout */
+    for (i = 0; i < US_BLOCK_COUNT; i++)
+        if (k_us_block[i].scan == scan)
+            return k_us_block[i].vk;
+    return 0;
+}
+
+int gb_keys_pos_scan(int vk)
+{
+    size_t i;
+    for (i = 0; i < US_BLOCK_COUNT; i++)
+        if (k_us_block[i].vk == vk)
+            return k_us_block[i].scan;
+    return 0;
+}
+
+/* A control's keys as parsed from a letter-written line: each typing-block
+ * key moves to where that letter is on the player's layout. A letter the
+ * layout lacks keeps its US place. Returns the number of keys that moved. */
+static int keys_from_letters(InputBindings *b, int control, gb_keys_scan_fn scan_of)
+{
+    int i, moved = 0;
+    if (!scan_of)
+        return 0;
+    for (i = 0; i < b->count[control]; i++) {
+        int vk = b->key[control][i], s, pos;
+        if (!gb_keys_pos_scan(vk))
+            continue;
+        s = scan_of(vk);
+        pos = s ? gb_keys_pos_vk((unsigned)s & 0xFF, 0) : 0;
+        if (pos && pos != vk) {
+            b->key[control][i] = (uint8_t)pos;
+            moved++;
+        }
+    }
+    return moved;
+}
+
 /* ---- settings ------------------------------------------------------------ */
 
 static int eq(const char *a, const char *b)
@@ -156,8 +219,11 @@ static int is_global(const char *k)
         || eq(k, "count");
 }
 
-/* One player setting. Returns 0, -1 for a bad value, 1 for an unknown key. */
-static int set_player(GbPadPlayerCfg *p, const char *k, const char *v)
+/* One player setting. Returns 0, -1 for a bad value, 1 for an unknown key.
+ * `letters`: the line's section names keys by letter (see keys_from_letters);
+ * `moved` counts the keys that moved. */
+static int set_player_ex(GbPadPlayerCfg *p, const char *k, const char *v,
+                         gb_keys_scan_fn letters, int *moved, int *key_control)
 {
     int n, ctl, src;
     if (!strncmp(k, "key_", 4) || !strncmp(k, "KEY_", 4)) {
@@ -168,6 +234,9 @@ static int set_player(GbPadPlayerCfg *p, const char *k, const char *v)
             p->keys = before;            /* a name that is no key changes nothing */
             return -1;
         }
+        n = keys_from_letters(&p->keys, ctl, letters);
+        if (moved) *moved += n;
+        if (key_control) *key_control = ctl;
         return 0;
     }
     if (eq(k, "preset")) {
@@ -211,6 +280,11 @@ static int set_player(GbPadPlayerCfg *p, const char *k, const char *v)
     return 1;
 }
 
+static int set_player(GbPadPlayerCfg *p, const char *k, const char *v)
+{
+    return set_player_ex(p, k, v, NULL, NULL, NULL);
+}
+
 int gb_pad_config_set_all(GbPadConfig *c, const char *key, const char *value)
 {
     int r = set_global(c, key, value), i;
@@ -249,6 +323,7 @@ void gb_pad_config_parse(GbPadConfig *c, const char *text, gb_pad_warn_fn warn)
 {
     static IniEntry e[GB_INI_MAX];   /* one config load at a time (start-up, tests) */
     int ne = 0, section = 0, line = 0, p, s, pass, i;
+    int by_letter[1 + GB_PAD_PLAYERS];
     const char *q = text;
 
     while (q && *q) {
@@ -309,26 +384,55 @@ void gb_pad_config_parse(GbPadConfig *c, const char *text, gb_pad_warn_fn warn)
             warnf(c, warn, "line %d: %s = \"%s\" is not a valid value", e[i].line,
                   e[i].key, e[i].value);
     }
+    /* How each section names its keys: by letter unless it says otherwise. */
+    for (i = 0; i < 1 + GB_PAD_PLAYERS; i++)
+        by_letter[i] = 1;
+    for (i = 0; i < ne; i++) {
+        if (!eq(e[i].key, "keys_by"))
+            continue;
+        if (eq(e[i].value, "position")) by_letter[e[i].section] = 0;
+        else if (eq(e[i].value, "letter")) by_letter[e[i].section] = 1;
+        else warnf(c, warn, "line %d: %s = \"%s\" is not a valid value", e[i].line,
+                   e[i].key, e[i].value);
+    }
     /* Per player: [all], then [playerN]; in each, the preset first. Warnings
      * are reported in the first player's pass only, so each is said once
      * (a [playerN]-only line is checked in its own player's pass). */
     for (p = 0; p < GB_PAD_PLAYERS; p++) {
+        uint32_t listed = 0;         /* controls given keys by a line */
+        int letter_lines = 0;        /* of them, lines written by letter */
         for (s = 0; s <= 1; s++) {
             int want = s ? p + 1 : 0;
             for (pass = 0; pass <= 1; pass++) {
                 for (i = 0; i < ne; i++) {
-                    int r;
-                    if (e[i].section != want || is_global(e[i].key))
+                    int r, moved = 0, ctl = -1;
+                    if (e[i].section != want || is_global(e[i].key) || eq(e[i].key, "keys_by"))
                         continue;
                     if ((pass == 0) != eq(e[i].key, "preset"))
                         continue;
-                    r = set_player(&c->player[p], e[i].key, e[i].value);
+                    r = set_player_ex(&c->player[p], e[i].key, e[i].value,
+                                      by_letter[want] ? c->letter_scan : NULL, &moved, &ctl);
+                    if (ctl >= 0) {
+                        listed |= 1u << ctl;
+                        letter_lines += by_letter[want];
+                    }
+                    if (s == 1 || p == 0)
+                        c->letter_keys += moved;
                     if (r && (s == 1 || p == 0))
                         warnf(c, warn, r > 0 ? "line %d: unknown setting %s%s"
                                              : "line %d: %s = \"%s\" is not a valid value",
                               e[i].line, e[i].key, r > 0 ? NULL : e[i].value);
                 }
             }
+        }
+        /* A player who rebound keys in a file written by letter keeps the
+         * whole keyboard as it was: the controls the file does not list keep
+         * their default letters too, each moved to that letter's place. */
+        if (letter_lines && c->letter_scan) {
+            int ctl;
+            for (ctl = 0; ctl < INPUT_CONTROL_COUNT; ctl++)
+                if (!(listed & (1u << ctl)))
+                    c->letter_keys += keys_from_letters(&c->player[p].keys, ctl, c->letter_scan);
         }
     }
 }

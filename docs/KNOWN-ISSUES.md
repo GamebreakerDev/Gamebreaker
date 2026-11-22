@@ -13,9 +13,11 @@ welcome as issues.
 
 ## Picture
 
-- **Frame rate 120 is experimental.** The game keeps its normal speed, but busy
-  match views may show fewer than 120 pictures a second. The score display's
-  meters, effects and most menu animations are unchecked at this rate.
+- **Frame rate 120 is experimental.** The game may play faster at 120 than at
+  60. The turbo and Gamebreaker meters, the camera fly-by before tip-off, the
+  player introductions and replays were measured to keep their speed, but busy
+  match views may show fewer than 120 pictures a second, and effects and most
+  menu animations are unchecked at this rate.
 - **"Menus wide" and "All wide" stretch flat screens** to the display's
   width, by design: menus, films, and the rendered player pictures on the
   player selection screens look wider than on a console. "4:3" keeps them in
@@ -27,10 +29,11 @@ welcome as issues.
 
 - **Four-player controllers** is experimental and off by default, and has not
   been tried with real controllers.
-- **Keys follow the letters printed on them, not their place.** On a keyboard
-  that is not laid out like a US one (AZERTY, for example), W A S D and the
-  other default keys sit in other places. The launcher's Keyboard page changes
-  any key.
+- **Keyboards not laid out like a US one have not been tried by hand.** Keys
+  go by their place on the keyboard, so W A S D and the other default keys
+  keep their places on AZERTY, QWERTZ and other layouts, and the launcher's
+  Keyboard page shows your own keyboard's labels. The extra key left of Z on
+  some keyboards cannot be given to a button.
 - PlayStation and Switch controllers work only through a layer that presents
   them as Xbox controllers (for example Steam Input).
 
@@ -48,8 +51,11 @@ welcome as issues.
 - A match pauses (the game's own pause menu) when another window comes to
   the front; menus keep running. During the camera fly-by before tip-off and
   the end-of-game countdown the pause waits until the game accepts one.
-- Of the cheats, only Big Heads, the two balls and No Hud are confirmed working
-  in a match.
+- Of the cheats, Street Kids, GB2 Trails Always On, Unlimited Turbo, Big Heads,
+  the two balls and No Hud are confirmed working in a match. All Quicks, Easy 2
+  Pointers and Hard 2 Pointers showed no effect in a Pick Up Game: the game
+  applies them only when it builds a player's ratings, which it did not do there
+  after the cheats were set. No Counters and Explosive Rims are unconfirmed.
 
 ## Mods
 

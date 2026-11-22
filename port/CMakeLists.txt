@@ -130,6 +130,7 @@ set(GAME_SOURCES
     src/gb_cpu.c            # thread placement on processors with performance and efficiency cores
     src/gb_cpu_logic.c      # its decision; tested by tests/cpu_logic_test.c
     src/gb_bgsound.c        # the game's sound while its window is not in front (GB_BG_SOUND)
+    src/gb_sticky.c         # Windows' Sticky Keys shortcut off while the window is in front
     src/gb_mods.c           # the player's replacement files from the mods folder (GB_MODS, GB_MODS_DIR)
     src/gb_mouse.c          # the mouse in menus (GB_MOUSE_MENUS)
     src/gb_textures.c       # mods' pictures drawn in place of game textures by fingerprint; the maker's texture dump

@@ -75,6 +75,10 @@ static ULONGLONG now_ms(void)
  * for it) be read and rumbled? Not in a background run, by the layer's rule. */
 static int host_pads_allowed(void)
 {
+    /* Public builds always allow them. The public value is set here, not in an
+     * #else below: the export removes the diagnostic block whole. */
+    int ok = 1;
+    return ok;
 }
 
 
@@ -233,6 +237,14 @@ static int file_beside_exe(const char *name, char *out, size_t size)
     return GetFileAttributesA(out) != INVALID_FILE_ATTRIBUTES;
 }
 
+/* The player's layout, for key lines written by letter (gb_pad_logic.h): the
+ * key that gives this virtual key on the keyboard layout in use at start. */
+static int layout_scan(int vk)
+{
+    return (int)MapVirtualKeyExA((UINT)vk, 0 /* MAPVK_VK_TO_VSC */, GetKeyboardLayout(0));
+}
+
+
 static void load_config(void)
 {
     static const struct { const char *env, *key; } ov[] = {
@@ -246,6 +258,7 @@ static void load_config(void)
     size_t i;
 
     gb_pad_config_defaults(&s_cfg);
+    s_cfg.letter_scan = layout_scan;
     if (cfg && *cfg)
         snprintf(path, sizeof path, "%s", cfg);
     else if (!file_beside_exe("controls.ini", path, sizeof path))
@@ -258,6 +271,9 @@ static void load_config(void)
             fclose(f);
             text[n] = 0;
             gb_pad_config_parse(&s_cfg, text, warn_line);
+            if (s_cfg.letter_keys)
+                gb_log("[PAD] controls.ini names keys by letter: they stay on the same keys "
+                       "(%d moved to that letter's place on this keyboard)\n", s_cfg.letter_keys);
         } else {
         }
     } else {

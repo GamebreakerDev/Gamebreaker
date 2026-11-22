@@ -543,11 +543,15 @@
    Updates: the ring comes to this page and holds the installed version.
    It spins while checking. The version list sits to its left.
    =================================================================== */
-.app[data-mode="main"][data-view="updates"] { --hx: 76%; --hy: 40%; --hs: 19rem; }
+/* The version and Check now sit where the ring ends up (--ux, --uy, --us, not
+   animated), not on the gliding --hx/--hy: they are in place from the first
+   frame and the ring glides in around them. */
+.app { --ux: 76%; --uy: 40%; --us: 19rem; }
+.app[data-mode="main"][data-view="updates"] { --hx: var(--ux); --hy: var(--uy); --hs: var(--us); }
 .upd-top { margin: 0; }
-.upd-version { position: absolute; left: var(--hx); top: var(--hy); translate: -50% -50%; font-size: 3.6rem;
+.upd-version { position: absolute; left: var(--ux); top: var(--uy); translate: -50% -50%; font-size: 3.6rem;
   background: linear-gradient(180deg, var(--text), var(--accent)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.upd-top .btn { position: absolute; left: var(--hx); top: calc(var(--hy) + var(--hs) * .5 + 1.8rem); translate: -50% 0; }
+.upd-top .btn { position: absolute; left: var(--ux); top: calc(var(--uy) + var(--us) * .5 + 1.8rem); translate: -50% 0; }
 .versions { max-width: 27rem; }
 .ver { grid-template-columns: 4.2rem minmax(0, 1fr); align-items: start; row-gap: .6rem; }
 .ver:first-child { border-top: 0; }

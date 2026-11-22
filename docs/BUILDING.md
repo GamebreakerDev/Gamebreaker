@@ -146,6 +146,13 @@ sliders in the game's Options screen. The game options (pause, rumble, songs,
 replays, demo) override the game's own setting for the run; leave them unset
 to keep the in-game controls in charge.
 
+In `controls.ini`, a `[playerN]` section with the line `keys_by = position`
+names keys by their place: a letter, digit or punctuation name means the key at
+that place on a US keyboard, so on AZERTY `W` is the key labelled Z. The
+launcher writes that line in every section it saves. A section without it
+names keys by the letter printed on them, as files from before 0.1.2 do, and
+those keys stay on the keys that carry those letters.
+
 Alt+Enter or F11 switches between window and fullscreen while it runs. F12
 saves a screenshot. Ctrl+F9 switches the texture dump on and off.
 
@@ -157,7 +164,8 @@ saves a screenshot. Ctrl+F9 switches the texture dump on and off.
   `gb_d3d11.c` (the Direct3D 11 renderer, behind the toolkit's back-end
   interface), `gb_overlay.c` (the start screen, corner mark, frame counter and
   screenshots), `gb_bgsound.c` (sound in the background), `gb_pad.c`
-  (controllers), `gb_save.c` (save folder, backups,
+  (controllers and keys by place), `gb_sticky.c` (Windows' Sticky Keys
+  shortcut while the game is in front), `gb_save.c` (save folder, backups,
   the write guard, the log file and the error box), `gb_mods.c` (the mods
   folder, archive and pack pieces), `gb_textures.c` (pictures replaced by
   fingerprint, the texture dump), `gb_cpu.c` (thread placement on processors

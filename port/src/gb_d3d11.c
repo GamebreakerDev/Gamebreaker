@@ -97,6 +97,10 @@ volatile uint32_t *xbox_Nv2aRegPtr(uint32_t offset);
 /* gb_pad.c: the controller layer (GB_PADS) is told about the window, device
  * arrivals and the exit, and hands back a notice for the title bar. */
 void gb_pad_window(HWND hwnd);
+int  gb_keys_pos_vk(unsigned scan, int extended);   /* gb_pad_logic.c: keys by position */
+void gb_sticky_window(int background);              /* gb_sticky.c: the Sticky Keys shortcut */
+void gb_sticky_focus(int in_front);
+void gb_sticky_shutdown(void);
 void gb_bgsound_window(HWND hwnd);
 void gb_bgsound_shutdown(void);
 void gb_pad_devices_changed(void);
@@ -546,6 +550,17 @@ static void refit_fullscreen(HWND h)
 static volatile LONG s_focus_has, s_focus_ever;
 static int s_ctrl_down;                 /* Ctrl held, from this window's own key messages (Ctrl+F9) */
 
+/* The key the game holds for a key message: in the typing block, the US key
+ * at the place of the key pressed (its scan code), so the default keys sit in
+ * the same places on every layout; any other key, and a message with no scan
+ * code, as Windows names it. Shortcuts above (F11, F12, Ctrl+F9, Alt+Enter)
+ * are read from Windows' name before this. */
+static int key_by_position(WPARAM w, LPARAM l)
+{
+    int pos = gb_keys_pos_vk((unsigned)((l >> 16) & 0xFF), (int)((l >> 24) & 1));
+    return pos ? pos : (int)w;
+}
+
 int gb_window_focus_lost(void)
 {
     return s_focus_ever && !s_focus_has;
@@ -679,6 +694,7 @@ static LRESULT CALLBACK gb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         gb_log("[D3D11] window closed: exiting\n");
         gb_pad_shutdown();              /* motors off: TerminateProcess skips atexit */
         gb_bgsound_shutdown();          /* the mixer's level back, for the same reason */
+        gb_sticky_shutdown();           /* Windows' Sticky Keys shortcut back, likewise */
         gb_save_before_exit("window");  /* a save being written finishes first (gb_save.c) */
         recomp_exit_hook_run("window");
         fflush(stdout);
@@ -720,7 +736,7 @@ static LRESULT CALLBACK gb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         side = xbox_InputWin32SideVk((int)w, (uint32_t)l);
         gb_mouse_key_pressed();         /* a key hides the menu pointer */
-        xbox_InputKeySet((int)w, 1);
+        xbox_InputKeySet(key_by_position(w, l), 1);
         if (side)
             xbox_InputKeySet(side, 1);
         return m == WM_SYSKEYDOWN ? DefWindowProcA(h, m, w, l) : 0;
@@ -730,7 +746,7 @@ static LRESULT CALLBACK gb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         int side = xbox_InputWin32SideVk((int)w, (uint32_t)l);
         if (w == VK_CONTROL)
             s_ctrl_down = 0;
-        xbox_InputKeySet((int)w, 0);
+        xbox_InputKeySet(key_by_position(w, l), 0);
         if (side)
             xbox_InputKeySet(side, 0);
         return m == WM_SYSKEYUP ? DefWindowProcA(h, m, w, l) : 0;
@@ -738,9 +754,11 @@ static LRESULT CALLBACK gb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_SETFOCUS:
         InterlockedExchange(&s_focus_has, 1);
         InterlockedExchange(&s_focus_ever, 1);
+        gb_sticky_focus(1);
         return 0;
     case WM_KILLFOCUS:
         InterlockedExchange(&s_focus_has, 0);
+        gb_sticky_focus(0);
         s_ctrl_down = 0;
         xbox_InputKeysClear();          /* or a key held across Alt-Tab stays held */
         return 0;
@@ -929,6 +947,7 @@ static DWORD WINAPI gb_window_thread(LPVOID unused)
         if (G.start_fullscreen && !G.start_minimised)
             set_fullscreen(G.hwnd, 1);
         gb_pad_window(G.hwnd);
+        gb_sticky_window(G.background);
         gb_bgsound_window(G.hwnd);
         SetTimer(G.hwnd, GB_PAD_TIMER, 250, NULL);
         if (gb_mouse_enabled())

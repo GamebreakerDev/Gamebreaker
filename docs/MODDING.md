@@ -220,7 +220,10 @@ picture, named by the fingerprint of the one it replaces.
    are fine, up to eight deep.
 4. Start the game. `logs\game.log` says
    `[MODS] texture bfe1843ca49c34ef from <your mod>` when the picture is drawn,
-   or why it could not be used.
+   or why it could not be used, and the launcher's Mods page marks the picture
+   "drawn". The log keeps at most 200 picture lines a start; after the last it
+   says `[MODS] textures: 200 picture lines written; no more this start`, and
+   the page then counts "or more".
 
 PNG and DDS are accepted. DDS (BC1, BC2, BC3 or BC7, or 32-bit, with your own
 mip levels) takes less memory and loads faster, which matters for large

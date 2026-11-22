@@ -298,7 +298,7 @@ static void gb_save_backup(void)
         return;
     }
     /* Backup folders are named yyyy-mm-dd_hhmmss, so the names sort by age. */
-    snprintf(pat, sizeof pat, "%s\\????-??-??_??????", bdir);
+    snprintf(pat, sizeof pat, "%s\\???\?-?\?-?\?_??????", bdir);   /* \? stops two question marks and a dash reading as a trigraph */
     f = FindFirstFileA(pat, &fd);
     if (f != INVALID_HANDLE_VALUE) {
         do {

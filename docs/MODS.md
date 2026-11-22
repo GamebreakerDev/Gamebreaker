@@ -21,7 +21,10 @@ A mod's files include single pieces of the game's archives, single lines of
 its text, and pictures that replace the game's wherever they appear; a line
 shows its number, and a plate counts its pictures beside its files. A file the game will not read is dimmed:
 "not in the archive" when the archive has no such piece, "not used" when the
-game left it out at its last start (point at it for the reason).
+game left it out at its last start (point at it for the reason). A picture the
+game drew at its last start says "drawn", and the plate counts them ("3
+pictures, 2 drawn"). A picture not drawn yet is not a fault: it shows only once
+its screen comes up in the game.
 
 ## Installing a mod
 

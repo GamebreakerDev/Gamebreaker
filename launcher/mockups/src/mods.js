@@ -54,9 +54,28 @@ const modBy = f => MD.list.find(m => m.folder === f);
 
 /* ------------------------------------------------------------ rendering */
 const stackEl = $('.stack'), lensEl = $('.lens'), modsPage = $('.page-mods'), arcsEl = $('.clash-arcs');
+/* Pictures the game drew at its last start (the host reads its log: m.drawn, and
+   m.seen 'all', or 'part' when the game stopped writing picture lines). Nothing
+   when the log says nothing of this mod's pictures; a picture not drawn is not an
+   error, its screen may not have come up. */
+const drawnText = m => {
+  if (!m.textures || !m.textures.length || !m.seen) return '';
+  const lost = new Set((m.lost || []).map(f => f.toLowerCase()));      // the game drew the other file of a clash
+  const k = (m.drawn || []).filter(f => !lost.has(f.toLowerCase())).length;
+  if (m.seen === 'part') return k ? `, <span class="plate-drawn">${k} or more drawn</span>` : '';
+  return `, <span class="plate-drawn">${k} drawn</span>`;
+};
+/* "3 files", "4 pictures, 2 drawn" or both; a pictures-only mod has no "0 files". */
+const plateCounts = m => {
+  const pics = m.textures ? m.textures.length : 0;
+  const parts = [];
+  if (m.files.length || !pics) parts.push(plural(m.files.length, 'file'));
+  if (pics) parts.push(plural(pics, 'picture') + drawnText(m));
+  return parts.join(', ');
+};
 function plateHtml(m, i) {
   const meta = [m.version ? `<span>${esc(m.version)}</span>` : '', m.author ? `<span>${esc(m.author)}</span>` : '',
-    `<span class="plate-size">${plural(m.files.length, 'file')}${m.textures && m.textures.length ? ', ' + plural(m.textures.length, 'picture') : ''}${m.size ? ', ' + sizeText(m.size) : ''}</span>`].join('');
+    `<span class="plate-size">${plateCounts(m)}${m.size ? ', ' + sizeText(m.size) : ''}</span>`].join('');
   const lost = m.on && m.lost && m.lost.length, miss = m.missing ? m.missing.length : 0;
   const side = [miss ? `<span class="plate-warn">${miss} not found</span>` : '',
     lost ? `<span class="plate-clash">${lost === m.files.length + (m.textures || []).length ? 'All overridden' : lost + ' overridden'}</span>` : '',
@@ -167,6 +186,7 @@ function renderLens() {
   const used = n ? Math.max(0, n - lost - (m.on ? (m.missing || []).length : 0)) / n : 0;   // entries the game did not find reach it no more than lost ones
   const lostSet = new Set(m.lost.map(f => f.toLowerCase())), missSet = new Set((m.missing || []).map(f => f.toLowerCase()));
   const why = new Map((m.refused || []).map(r => [String(r.file).toLowerCase(), r.why]));
+  const drawnSet = new Set((m.seen ? m.drawn || [] : []).map(f => f.toLowerCase()));
   const fileRows = m.files.slice(0, 300).map((f, i) => {
     const lf = f.toLowerCase(), note = m.notes && m.notes[i] ? ` <span class="f-note">${esc(m.notes[i])}</span>` : '';
     if (missSet.has(lf)) return `<span class="f-unused" title="Not read by the game">${esc(f)} <span class="f-note">not in the archive</span></span>`;
@@ -178,6 +198,7 @@ function renderLens() {
       const lf = f.toLowerCase();
       if (why.has(lf)) return `<span class="f-unused" title="${esc(why.get(lf))}">${esc(f)} <span class="f-note">not used</span></span>`;
       if (lostSet.has(lf)) return `<span class="f-lost">${esc(f)} <span class="f-note">picture</span> <span class="f-note">from ${esc(m.lostFrom[lf] || '')}</span></span>`;
+      if (drawnSet.has(lf)) return `<span class="f-drawn" title="Drawn at the last start">${esc(f)} <span class="f-note">picture</span> <span class="f-note">drawn</span></span>`;
       return `<span>${esc(f)} <span class="f-note">picture</span></span>`;
     }).join('') +
     (m.unused || []).slice(0, 40).map(f => `<span class="f-unused" title="Not read by the game">${esc(f)}</span>`).join('');
@@ -465,7 +486,8 @@ function onModsEvent(o) {
 }
 function normMod(o) {
   const m = Object.assign({ files: [], unused: [], missing: [], on: true }, o);
-  for (const k of ['files', 'keys', 'notes', 'unused', 'missing', 'textures', 'textureKeys', 'refused']) m[k] = Array.from(m[k] || []);
+  for (const k of ['files', 'keys', 'notes', 'unused', 'missing', 'textures', 'textureKeys', 'refused', 'drawn']) m[k] = Array.from(m[k] || []);
+  m.seen = m.seen === 'all' || m.seen === 'part' ? m.seen : '';
   m.name = m.name || m.folder; return m;
 }
 
@@ -495,7 +517,12 @@ const MOCK_MODS = () => [
     files: ['database/xdbplyr.adf', 'database/xdbteam.adf', 'xf/xf000002/417.xsh'], missing: ['xf/xf000002/417.xsh'] },
   { folder: 'skyline-Sunset_Rooftop', name: 'Sunset Rooftop', version: '0.9.2', author: 'skyline', on: false, size: 38400000, manifest: true,
     desc: 'The rooftop court at sunset.', icon: mockArt('sun', 260, 28), files: ['xf/court07.viv'], unused: ['preview/sunset.jpg'] },
-  { folder: 'my_ball_texture', name: 'my_ball_texture', version: '', author: '', on: true, size: 65536, manifest: false, files: ['fe/BALL.xsh'] }
+  { folder: 'my_ball_texture', name: 'my_ball_texture', version: '', author: '', on: true, size: 65536, manifest: false, files: ['fe/BALL.xsh'] },
+  { folder: 'pixelwork-Sharp_Courts', name: 'Sharp Courts', version: '1.0.0', author: 'pixelwork', on: true, size: 9300000, manifest: true,
+    desc: 'Court floors and rims drawn at four times the size.', icon: mockArt('grid', 190, 160), files: [],
+    textures: ['textures/bfe1843ca49c34ef court floor.png', 'textures/3d0a71c2e94b8f15 rim.png', 'textures/8c21f0e6a3d47b92 net.png'],
+    textureKeys: ['tex:bfe1843ca49c34ef', 'tex:3d0a71c2e94b8f15', 'tex:8c21f0e6a3d47b92'],
+    drawn: ['textures/bfe1843ca49c34ef court floor.png', 'textures/3d0a71c2e94b8f15 rim.png'], seen: 'all' }
 ];
 const MOCK_ZIPS = [
   () => ({ ok: true, token: 'm1', zip: 'neonline-Street_Lights-1.1.0.zip', folder: 'neonline-Street_Lights', name: 'Street Lights', version: '1.1.0', author: 'neonline', manifest: true,

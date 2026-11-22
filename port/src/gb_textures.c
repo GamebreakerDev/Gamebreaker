@@ -71,9 +71,18 @@ static uint64_t s_bytes;                    /* held now */
 static int      s_lines, s_budget_told;
 static uint32_t s_frame;
 
+/* At most TX_LOG_LINES picture lines a start, so a large pack cannot fill the
+ * log. The line after the last one says so: the launcher's Mods page reads
+ * "texture <fp> from <mod>" to mark the pictures drawn, and after this line a
+ * picture with no line of its own may have been drawn too. */
 static int log_ok(void)
 {
-    return ++s_lines <= TX_LOG_LINES;
+    if (s_lines > TX_LOG_LINES)
+        return 0;
+    if (++s_lines <= TX_LOG_LINES)
+        return 1;
+    gb_log("[MODS] textures: %d picture lines written; no more this start\n", TX_LOG_LINES);
+    return 0;
 }
 
 /* ── the fingerprint ─────────────────────────────────────────────────────

@@ -22,9 +22,9 @@ const S = {
   busy: false, updated: false, sheetOpen: false, launchOpen: false, mockOpen: false, built: false,
   set: {
     theme: M.defaultTheme || 'system', motion: 'full', size: 'auto',
-    windowMode: 'fullscreen', monitor: 0, res: 'fit', aspect: '16:9', aspect2d: 'stretch', fps: 0, gameHz: '60', vsync: true,
+    windowMode: 'window', monitor: 0, res: 'fit', aspect: '16:9', aspect2d: 'stretch', fps: 0, gameHz: '60', vsync: true,
     aniso: '16', msaa: '4', gpuPref: 'default',
-    skipIntro: true, pauseBg: true, songRotate: true, demoDelay: '90', rumbleOn: true,
+    skipIntro: true, pauseBg: true, songRotate: true, demoDelay: '90', rumbleOn: true, mouseMenus: false,
     smoothAudio: true, bgAudio: true, volume: 100,
     volMusic: 100, volSfx: 100, volCrowd: 100, volPlayers: 100, volCommentary: 100, commentary: true, mono: false, showFps: false, texDump: false,
     cheats: false, cheat_street_kids: false, cheat_no_counters: false, cheat_gb_trails: false, cheat_all_quicks: false, cheat_unlimited_turbo: false, cheat_easy_2_pointers: false, cheat_hard_2_pointers: false, cheat_big_heads: false, cheat_wnba_ball: false, cheat_alternate_ball: false, cheat_no_hud: false, cheat_explosive_rims: false,
@@ -48,7 +48,7 @@ const scenario = () => SCEN[S.set.scenario] || 'ok';
    that time's default counts as chosen, and one equal to it as not chosen. */
 const PERSIST = ['theme', 'size', 'windowMode', 'monitor', 'res', 'aspect', 'aspect2d', 'gameHz', 'vsync', 'aniso', 'msaa', 'skipIntro', 'smoothAudio', 'bgAudio', 'volume',
   'pads', 'preset', 'trigger', 'deadzone', 'rumble1', 'rumble2', 'rumble3', 'rumble4', 'padOrder', 'kbPlayer', 'padBg', 'gpuPref', 'updates', 'sound', 'mods',
-  'pauseBg', 'songRotate', 'demoDelay', 'rumbleOn',
+  'pauseBg', 'songRotate', 'demoDelay', 'rumbleOn', 'mouseMenus',
   'volMusic', 'volSfx', 'volCrowd', 'volPlayers', 'volCommentary', 'commentary', 'mono', 'showFps', 'texDump',
   'cheats', 'cheat_street_kids', 'cheat_no_counters', 'cheat_gb_trails', 'cheat_all_quicks', 'cheat_unlimited_turbo', 'cheat_easy_2_pointers', 'cheat_hard_2_pointers', 'cheat_big_heads', 'cheat_wnba_ball', 'cheat_alternate_ball', 'cheat_no_hud', 'cheat_explosive_rims'];
 /* The renderer is always Direct3D 11 (the slow reference renderer was removed
@@ -58,9 +58,9 @@ const BASE = Object.assign({}, S.set);
 /* What a format 1 save was compared with: that time's defaults, written out
    wherever today's differ, so changing a default never makes an old value look chosen. */
 const V1_DEFAULTS = Object.assign({}, BASE, { windowMode: 'window', res: '2', aspect: '4:3', aspect2d: 'auto', vsync: false, smoothAudio: false });
-/* Defaults: borderless
-   fullscreen, vertical sync, the intro film skipped, and the shape and
-   internal resolution of the display the game opens on. */
+/* Defaults: a window (the owner's choice for 0.1.2; borderless fullscreen
+   before), vertical sync, the intro film skipped, and the shape and internal
+   resolution of the display the game opens on. */
 const SHAPES = [['4:3', 4 / 3], ['16:10', 16 / 10], ['16:9', 16 / 9], ['21:9', 21 / 9], ['32:9', 32 / 9]];
 function targetDisplay() {
   const d = (LIVE && LIVE.displays) || [];
@@ -633,6 +633,8 @@ function summaries() {
   }
   // Cheats: the rows act only with the master switch on; the whole page waits
   // for the game's side in the live launcher (CHEATS_READY).
+  // Mouse in menus: the row is hidden until the feature is ready to offer.
+  $$('[data-mouse-row]').forEach(r => { r.hidden = !MOUSE_MENUS_READY; });
   const cheatsBuilt = !LIVE || CHEATS_READY;
   $$('[data-cheats-master], [data-unlock-row]').forEach(r => {
     r.classList.toggle('row-off', !cheatsBuilt);
@@ -668,6 +670,10 @@ const CHEAT_PAIRS = {
 /* The game's side of the cheats is built. Set to false to show the page dimmed
    and pass nothing. */
 const CHEATS_READY = true;
+/* Mouse in menus (GB_MOUSE_MENUS) is offered. False: its row on Controls is
+   hidden. host.ps1's $script:MouseMenusReady must say the same, or Play passes
+   nothing whatever the saved setting says. */
+const MOUSE_MENUS_READY = false;
 function setSetting(key, value) {
   S.set[key] = value;
   chose(key);
@@ -766,7 +772,7 @@ const KEY_COLS = [
 const TURBO_CTLS = { left_trigger: [0, 1, 2], right_trigger: [1, 2], left_thumb: [2] };
 const TURBO_DEF = ['lshift', 'space', 'semicolon'];
 const KEY_ROWS = KEY_COLS.flat();
-const K = { players: { 1: {}, 2: {}, 3: {}, 4: {} }, built: false };
+const K = { players: { 1: {}, 2: {}, 3: {}, 4: {} }, labels: {}, built: false };
 const KEY_WORDS = { escape: 'Esc', enter: 'Enter', backspace: 'Backspace', tab: 'Tab', shift: 'Shift', ctrl: 'Ctrl', space: 'Space', capslock: 'Caps Lock', pause: 'Pause',
   pageup: 'Page Up', pagedown: 'Page Down', end: 'End', home: 'Home', left: 'Left arrow', up: 'Up arrow', right: 'Right arrow', down: 'Down arrow', insert: 'Insert', delete: 'Delete',
   numpadmultiply: 'Keypad *', numpadadd: 'Keypad +', numpadsubtract: 'Keypad -', numpaddecimal: 'Keypad .', numpaddivide: 'Keypad /',
@@ -775,7 +781,14 @@ const KEY_WORDS = { escape: 'Esc', enter: 'Enter', backspace: 'Backspace', tab: 
 const KEY_ALIAS = { return: 'enter', esc: 'escape', control: 'ctrl' };
 const keyCanon = n => { const t = String(n).trim(); const l = t.toLowerCase(); return t.length === 1 ? t.toUpperCase() : (KEY_ALIAS[l] || l); };
 const keyList = v => String(v).split(',').map(keyCanon).filter(k => k && k !== 'none');
-function keyLabel(n) { const m = /^numpad(\d)$/.exec(n); return m ? `Keypad ${m[1]}` : KEY_WORDS[n] || (/^f\d+$/.test(n) ? n.toUpperCase() : n); }
+/* Keys are bound by their place on the keyboard: a name is the US key at that
+   place (port\src\gb_pad_logic.c), and the label shown is what the player's
+   own keyboard prints there (from the host, or from the key just pressed). */
+const POS_KEYS = new Set([...'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 'minus', 'equals', 'leftbracket', 'rightbracket', 'semicolon', 'quote', 'grave', 'backslash', 'comma', 'period', 'slash']);
+function keyLabel(n) {
+  if (POS_KEYS.has(n) && K.labels[n]) return K.labels[n];
+  const m = /^numpad(\d)$/.exec(n); return m ? `Keypad ${m[1]}` : KEY_WORDS[n] || (/^f\d+$/.test(n) ? n.toUpperCase() : n);
+}
 /* Shift held on either side also counts as the Shift of that side. */
 const keysOverlap = (a, b) => a === b || ['shift', 'ctrl', 'alt'].some(w => (a === w && (b === 'l' + w || b === 'r' + w)) || (b === w && (a === 'l' + w || a === 'r' + w)));
 const keysPlayer = () => (S.set.pads ? S.set.kbPlayer : 1);
@@ -817,7 +830,19 @@ function renderKeys() {
     if (b !== capture) $('.keycap', b).textContent = keysOf(c, def).map(keyLabel).join(' or ') || 'None';
   }
 }
+/* The key's place (event.code), not its label, so the same key on every layout. */
+const CODE_KEYS = { Backspace: 'backspace', Tab: 'tab', Enter: 'enter', ShiftLeft: 'lshift', ShiftRight: 'rshift', ControlLeft: 'lctrl', ControlRight: 'rctrl',
+  AltLeft: 'alt', AltRight: 'alt', Pause: 'pause', CapsLock: 'capslock', Escape: 'escape', Space: 'space', PageUp: 'pageup', PageDown: 'pagedown', End: 'end', Home: 'home',
+  ArrowLeft: 'left', ArrowUp: 'up', ArrowRight: 'right', ArrowDown: 'down', Insert: 'insert', Delete: 'delete',
+  Semicolon: 'semicolon', Equal: 'equals', Comma: 'comma', Minus: 'minus', Period: 'period', Slash: 'slash', Backquote: 'grave',
+  BracketLeft: 'leftbracket', Backslash: 'backslash', BracketRight: 'rightbracket', Quote: 'quote' };
 function keyFromEvent(e) {
+  const c = e.code || ''; let m;
+  if ((m = /^Key([A-Z])$/.exec(c)) || (m = /^Digit(\d)$/.exec(c))) return m[1];
+  if ((m = /^F(\d{1,2})$/.exec(c))) return +m[1] <= 12 ? 'f' + m[1] : '';
+  if (CODE_KEYS[c]) return CODE_KEYS[c];
+  if (c && !c.startsWith('Numpad')) return '';      // a key the game has no name for (the extra key left of Z, media keys)
+  // The keypad keeps Windows' own codes (Num Lock decides digits or arrows), as the game reads them.
   const k = e.keyCode;
   if ((k >= 65 && k <= 90) || (k >= 48 && k <= 57)) return String.fromCharCode(k);
   if (k >= 96 && k <= 105) return 'numpad' + (k - 96);
@@ -834,8 +859,8 @@ function cancelRebind() {
 }
 function saveKeys() { if (LIVE) send('live:keys:' + JSON.stringify({ player: keysPlayer(), keys: K.players[keysPlayer()] })); }
 function finishRebind(e) {
-  if (e.key === 'Escape') { cancelRebind(); return; }
   const name = keyCanon(keyFromEvent(e));
+  if (POS_KEYS.has(name) && e.key && e.key.length === 1 && e.key.trim()) K.labels[name] = e.key.toUpperCase();
   const refuse = why => { bind('keysMsg', `${why} Press another key.`); tick('back'); };
   if (!name) return refuse('That key cannot be used.');
   if (KEY_TAKEN[name]) return refuse(KEY_TAKEN[name]);
@@ -851,7 +876,26 @@ function finishRebind(e) {
 }
 function onKeys(o) {
   if (o.ok === false) { toast(o.text || 'The keys could not be saved', 'info'); return; }
-  if (o.players) { for (const p of [1, 2, 3, 4]) K.players[p] = Object.assign({}, o.players[p] || o.players[String(p)] || {}); renderKeys(); }
+  if (o.labels) K.labels = Object.assign({}, o.labels);
+  if (o.players) {
+    for (const p of [1, 2, 3, 4]) {
+      K.players[p] = Object.assign({}, o.players[p] || o.players[String(p)] || {});
+      if (o.letterKeyed && o.letterKeyed[p] && o.placeOf) letterDefaults(p, o.placeOf);
+    }
+    renderKeys();
+  }
+}
+/* A player whose file was written by letter (before keys went by place) keeps
+   the whole old keyboard, as the game reads it: the defaults the file does not
+   list keep their letters, at those letters' places on this keyboard. */
+function letterDefaults(p, placeOf) {
+  const defs = KEY_ROWS.filter(([c]) => !/^turbo/.test(c)).map(([c, , d]) => [c, d])
+    .concat(Object.entries(TURBO_CTLS).map(([c, idx]) => [c, idx.map(j => TURBO_DEF[j]).join(', ')]));
+  for (const [ctl, def] of defs) {
+    if (K.players[p][ctl] !== undefined) continue;
+    const was = keyList(def), now = was.map(k => keyCanon(placeOf[k] || k));
+    if (now.join(', ') !== was.join(', ')) K.players[p][ctl] = now.join(', ');
+  }
 }
 document.addEventListener('click', e => {
   if (e.target.closest('[data-keys-reset]')) { cancelRebind(); K.players[keysPlayer()] = {}; renderKeys(); saveKeys(); toast('Default keys restored', 'ok'); return; }
@@ -915,7 +959,10 @@ function drawPreview(animate) {
 /* Rows follow each other in from the seam side after a change of section. */
 function cascade(scope) {
   $$('.row, .ver, .acc, .tool, .upd-top, .pick-tile', scope).filter(el => el.getClientRects().length).forEach((el, i) => {
-    el.animate([{ opacity: 0, transform: 'translateX(-1rem)' }, { opacity: 1, transform: 'none' }],
+    // .upd-top holds things placed on the ring: a transform would make it their
+    // containing block and move them while it runs, so it only fades in.
+    const slide = !el.matches('.upd-top');
+    el.animate(slide ? [{ opacity: 0, transform: 'translateX(-1rem)' }, { opacity: 1, transform: 'none' }] : [{ opacity: 0 }, { opacity: 1 }],
       { duration: 340, delay: 110 + Math.min(i, 9) * 38, easing: 'cubic-bezier(.05, .7, .1, 1)', fill: 'backwards' });
   });
 }
