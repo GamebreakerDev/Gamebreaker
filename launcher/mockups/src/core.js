@@ -23,7 +23,7 @@ const S = {
   set: {
     theme: M.defaultTheme || 'system', motion: 'full', size: 'auto',
     windowMode: 'window', monitor: 0, res: 'fit', aspect: '16:9', aspect2d: 'stretch', fps: 0, gameHz: '60', vsync: true,
-    aniso: '16', msaa: '4', gpuPref: 'default',
+    aniso: '16', msaa: '4', gpuPref: 'default', gpuVertex: false,
     skipIntro: true, pauseBg: true, songRotate: true, demoDelay: '90', rumbleOn: true, mouseMenus: false,
     smoothAudio: true, bgAudio: true, volume: 100,
     volMusic: 100, volSfx: 100, volCrowd: 100, volPlayers: 100, volCommentary: 100, commentary: true, mono: false, showFps: false, texDump: false,
@@ -48,7 +48,7 @@ const scenario = () => SCEN[S.set.scenario] || 'ok';
    that time's default counts as chosen, and one equal to it as not chosen. */
 const PERSIST = ['theme', 'size', 'windowMode', 'monitor', 'res', 'aspect', 'aspect2d', 'gameHz', 'vsync', 'aniso', 'msaa', 'skipIntro', 'smoothAudio', 'bgAudio', 'volume',
   'pads', 'preset', 'trigger', 'deadzone', 'rumble1', 'rumble2', 'rumble3', 'rumble4', 'padOrder', 'kbPlayer', 'padBg', 'gpuPref', 'updates', 'sound', 'mods',
-  'pauseBg', 'songRotate', 'demoDelay', 'rumbleOn', 'mouseMenus',
+  'pauseBg', 'songRotate', 'demoDelay', 'rumbleOn', 'mouseMenus', 'gpuVertex',
   'volMusic', 'volSfx', 'volCrowd', 'volPlayers', 'volCommentary', 'commentary', 'mono', 'showFps', 'texDump',
   'cheats', 'cheat_street_kids', 'cheat_no_counters', 'cheat_gb_trails', 'cheat_all_quicks', 'cheat_unlimited_turbo', 'cheat_easy_2_pointers', 'cheat_hard_2_pointers', 'cheat_big_heads', 'cheat_wnba_ball', 'cheat_alternate_ball', 'cheat_no_hud', 'cheat_explosive_rims'];
 /* The renderer is always Direct3D 11 (the slow reference renderer was removed

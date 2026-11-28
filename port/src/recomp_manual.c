@@ -429,14 +429,18 @@ void sub_002056E0(void)
  * 1 the experiment above, in a working build only. */
 static int gb_skip_intro_state = -1;
 
-/* ── Skip the intro film: GB_SKIP_INTRO=1 (works; off by default) ───────────
+/* ── Skip the intro film: GB_SKIP_INTRO=1 (off by default) ───────────
  *
- * Presses START for the player while the intro film (xmt0018) plays, which
- * is what a player would do: the game's own skip, nothing set from outside. The title
- * screen then comes up about 4 s into the film, about 24 s from start,
- * instead of 63.5 s. The EA logo and the NBA legal notice still play: the game
- * ignores START in both (measured), and ending them any other way (setting
- * the movie player's own skip flag) made the game's video codec fail.
+ * The film is normally left out of the boot playlist before it is opened
+ * (sub_000D9C60_enter, below), so the title screen follows the legal notice
+ * at about 20 s. What follows here is the fallback for when that does not
+ * apply: it presses START for the player while the intro film (xmt0018)
+ * plays, which is what a player would do: the game's own skip, nothing set
+ * from outside. The title screen then comes up about 4 s into the film,
+ * about 24 s from start, instead of 63.5 s. The EA logo and the NBA legal
+ * notice still play: the game ignores START in both (measured), and ending
+ * them any other way (setting the movie player's own skip flag) made the
+ * game's video codec fail.
  *
  * When: 4 s after the movie player is first seen on the film with its stream
  * ready. Measured before choosing: a START
@@ -586,6 +590,107 @@ void sub_000DA010_enter(void)
     } else {
         gb_skip_intro_state = 0;
     }
+}
+
+/* Entry hook on the movie player's "add a film to the playlist" (guest
+ * 0x000D9580, thiscall, arg 1 = the film's path). Diagnostic only:
+ * GB_MOVIE_TRACE=1 logs each film queued, with the guest return addresses
+ * found on the guest stack, to find the code that queues a given film. */
+void sub_000D9580_enter(void)
+{
+}
+
+/* The file name (after the last slash) of playlist entry i of a movie
+ * player, or "" when the entry has no name. */
+static const char *gb_player_entry_base(uint32_t player, int i, char *name, size_t size)
+{
+    uint32_t va = GB_MEM32(player + 0xE0 + 4u * (uint32_t)i);
+    const char *base;
+    size_t n;
+
+    name[0] = 0;
+    if (!va)
+        return name;
+    for (n = 0; n < size - 1; n++) {
+        name[n] = (char)GB_MEM8(va + n);
+        if (!name[n])
+            break;
+    }
+    name[n] = 0;
+    base = strrchr(name, '/');
+    if (!base) base = strrchr(name, '\\');
+    return base ? base + 1 : name;
+}
+
+/* ── Skip the intro film cleanly: GB_SKIP_INTRO=1 ───────────
+ *
+ * The boot screen queues the boot films into one movie player at start,
+ * as one playlist: entry 0 the publisher's logo (opened at once), 1 the
+ * league's legal notice, 2 the intro film, 3 the title screen's film, the
+ * last three "queued but not opened" (their stream slot holds 1 until the
+ * player reaches them). The screen treats entry 2 as the film: while it is
+ * current, START runs the game's own skip, which deletes the player and
+ * makes a new one with the title film only.
+ *
+ * This entry hook on the player's "next film" routine (guest 0x000D9C60,
+ * thiscall on the player) acts at the step from the legal notice to the
+ * film: it empties the film's slot and moves the current entry to 2, so the
+ * routine itself steps on to entry 3 and opens the title film, exactly as it
+ * does when the film has played to its end. The film's file is never
+ * opened: no frame and no sound of it. The logo and the legal notice play
+ * as before. Only in the boot (the hook in sub_000DA010_enter ends that at
+ * the first film that is not a boot film), only for that playlist (names and
+ * slots are checked), and only while the film's slot still holds the
+ * "not opened" mark, so nothing that was opened is ever dropped. If any of
+ * that does not hold, the film plays and the START press below skips it, as
+ * in 0.1.2. */
+static int gb_is_intro_film(const char *base)
+{
+    return gb_boot_movie_kind(base) == 1 || _stricmp(base, "xmtpl18.nfx") == 0;
+}
+
+static int gb_is_legal_notice(const char *base)
+{
+    return !_stricmp(base, "xmt0016.nfx") || !_stricmp(base, "xmtjp16.nfx")
+        || !_stricmp(base, "xmtfr16.nfx");
+}
+
+static int gb_skip_intro_on(void)
+{
+    if (gb_skip_intro_state < 0) {
+        const char *p = getenv("GB_SKIP_INTRO");
+        gb_skip_intro_state = (p && p[0] && p[0] != '0') ? 2 : 0;
+    }
+    return gb_skip_intro_state == 2;
+}
+
+static int gb_intro_left_out;      /* 1 once the film was left out of the boot */
+
+void sub_000D9C60_enter(void)
+{
+    uint32_t player = g_ecx;
+    char n1[64], n2[64], n3[64];
+    const char *b1, *b2, *b3;
+    int8_t cur;
+
+    if (!player || gb_intro_left_out || !gb_skip_intro_on())
+        return;
+    cur = (int8_t)GB_MEM8(player + 0xFE);
+    if (cur != 1)
+        return;
+    if (GB_MEM32(player + 0xC8 + 4u * 2) != 1u     /* the film: queued, not opened */
+            || GB_MEM32(player + 0xC8 + 4u * 3) == 0u)  /* the title film after it */
+        return;
+    b1 = gb_player_entry_base(player, 1, n1, sizeof n1);
+    b2 = gb_player_entry_base(player, 2, n2, sizeof n2);
+    b3 = gb_player_entry_base(player, 3, n3, sizeof n3);
+    if (!gb_is_legal_notice(b1) || !gb_is_intro_film(b2) || gb_boot_movie_kind(b3) != 0)
+        return;
+    GB_MEM32(player + 0xC8 + 4u * 2) = 0;     /* nothing to open or close */
+    GB_MEM8(player + 0xFE) = 2;               /* the routine steps on to 3 */
+    gb_intro_left_out = 1;
+    gb_log("[GB] skip intro: the intro film (%s) was left out; the title film (%s) follows the legal notice\n",
+           b2, b3);
 }
 
 /* ── Sound thread: a 1 ms clock, and a longer lead ───────────
@@ -1577,6 +1682,44 @@ static void gb_game_options_apply(void)
     gb_game_option("GB_AUTO_REPLAY", "auto_replay");
 }
 
+int gb_game_hz(void);                       /* below, with the step rate */
+
+/* Menu auto-repeat at a step rate other than 60. Holding a direction on a menu
+ * moves the highlight by an amount added every step: g_repeatSpeed (8) to
+ * start, growing by g_repeatStep (2) after each move up to g_repeatSpeedMax
+ * (20). The game never scales them by its rate, so at 120 a held direction
+ * scrolled twice as fast (measured on the Main Menu: holds of 250 and 400 ms
+ * moved 3 and 5 rows at 120 against 2 and 2 at 60; with the three halved, 2,
+ * 2, 3, 4, 5 rows for holds of 250 to 850 ms at both rates). They are whole
+ * numbers, so they are scaled only where 60 / rate keeps them whole (120);
+ * other rates keep the game's values and say so. */
+static void gb_menu_repeat_rate(void)
+{
+    static const struct { const char *name; uint32_t object; int value; } v[] = {
+        { "g_repeatSpeed", 0x002DB7C8u, 8 }, { "g_repeatSpeedMax", 0x002DB7F4u, 20 },
+        { "g_repeatStep", 0x002DB814u, 2 },
+    };
+    int hz = gb_game_hz(), i, ok = 1;
+
+    if (hz == 60)
+        return;
+    for (i = 0; i < 3; i++)
+        if ((v[i].value * 60) % hz || (int)GB_MEM32(v[i].object + 0x18u) != v[i].value)
+            ok = 0;                         /* not whole, or already set (GB_CVAR) */
+    if (!ok) {
+        gb_log("[GB] menu repeat: not scaled to %d steps a second (not a whole number, or already set);"
+               " a held direction moves up to %.2f times as fast as at 60\n", hz, hz / 60.0);
+        return;
+    }
+    for (i = 0; i < 3; i++) {
+        char text[16];
+        snprintf(text, sizeof text, "%d", v[i].value * 60 / hz);
+        gb_cvar_set(v[i].name, strlen(v[i].name), text);
+    }
+    gb_log("[GB] menu repeat: scaled to %d steps a second (%d, %d, %d)\n", hz,
+           8 * 60 / hz, 20 * 60 / hz, 2 * 60 / hz);
+}
+
 void sub_0007F760(void)
 {
     int pct[5], any = 0, i;
@@ -1586,6 +1729,7 @@ void sub_0007F760(void)
         gb_cvar_set("audio_no_commentary_speech", 26, "1");
     }
     gb_game_options_apply();
+    gb_menu_repeat_rate();
 
     sub_0007F760_gen();
 
@@ -2076,6 +2220,8 @@ void gb_d3d11_view_set(int panel);
 /* The panel fit is on whenever the wider view is. */
 static int gb_panel_fit(void)
 {
+    int on = 1;
+    return on;
 }
 
 

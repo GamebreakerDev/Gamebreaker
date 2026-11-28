@@ -4,6 +4,11 @@
 #   powershell -ExecutionPolicy Bypass -File port\regen.ps1 -SkipBuild
 #   powershell -ExecutionPolicy Bypass -File port\regen.ps1 -BuildOnly
 #   powershell -ExecutionPolicy Bypass -File port\regen.ps1 -BuildOnly -Compiler both
+#   powershell -ExecutionPolicy Bypass -File port\regen.ps1 -NoCache    (run every lift step)
+#
+# A lift step whose inputs did not change since it last wrote its outputs is
+# kept (tools\pipeline.ps1, "The step cache"): after an edit inside a
+# hand-written function in recomp_manual.c, nothing is lifted again.
 #
 # Expects, next to this folder:
 #   ..\xboxrecomp\   a clone of https://github.com/sp00nznet/xboxrecomp
@@ -27,7 +32,10 @@ param(
     [switch]$BuildOnly,                 # do not lift again: only build (after a change in port\src)
     [ValidateSet('clang', 'msvc', 'both')]
     [string]$Compiler = 'clang',
-    [switch]$EvenIfPlaying              # build although the game is running (a build takes every core and makes it hitch)
+    [switch]$EvenIfPlaying,             # build although the game is running (a build takes every core and makes it hitch)
+    [switch]$NoCache                    # run every step of the lift. By default a step whose inputs are
+                                        # unchanged since it last wrote its outputs, and whose outputs are
+                                        # still there byte for byte, is kept (tools\pipeline.ps1, "The step cache")
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,10 +56,14 @@ $Xbe = (Resolve-Path $Xbe).Path
 $null = Assert-GbXbe $Xbe
 Write-Host "default.xbe hash OK"
 
+# The few changes this project needs inside the toolkit (port\patches\README.md).
+# Before the lift: the patch also touches the disassembler's Python files.
+& (Join-Path $PSScriptRoot 'patches\apply.ps1')
+
 if (-not $BuildOnly) {
     # The developer layout: the toolkit's in-tree tools\*\output folders, which
     # tools.seed_from_log and the other bring-up tools read.
-    $null = Invoke-GbLift -Python @('py', '-3') -Toolkit $toolkit -Xbe $Xbe -PortDir $PSScriptRoot -GenDir $genDir
+    $null = Invoke-GbLift -Python @('py', '-3') -Toolkit $toolkit -Xbe $Xbe -PortDir $PSScriptRoot -GenDir $genDir -StepCache:(-not $NoCache)
 }
 
 if ($SkipBuild) { return }
@@ -59,9 +71,6 @@ if ($SkipBuild) { return }
 if (-not $EvenIfPlaying -and (Get-Process gamebreaker -ErrorAction SilentlyContinue)) {
     throw 'The game is running. A build takes every processor core and makes it hitch: close the game first, or pass -EvenIfPlaying.'
 }
-
-# The few changes this project needs inside the toolkit (port\patches\README.md).
-& (Join-Path $PSScriptRoot 'patches\apply.ps1')
 
 $cmake = Find-GbCmake (Join-Path $root 'toolchain')
 if (-not $cmake) { throw 'cmake not found in toolchain\, on PATH or inside Visual Studio. port\tools\fetch_toolchain.ps1 fetches one.' }

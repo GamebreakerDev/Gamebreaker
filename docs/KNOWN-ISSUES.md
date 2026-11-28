@@ -13,11 +13,18 @@ welcome as issues.
 
 ## Picture
 
-- **Frame rate 120 is experimental.** The game may play faster at 120 than at
-  60. The turbo and Gamebreaker meters, the camera fly-by before tip-off, the
-  player introductions and replays were measured to keep their speed, but busy
-  match views may show fewer than 120 pictures a second, and effects and most
-  menu animations are unchecked at this rate.
+- **Frame rate 120 is experimental.** At 120 the players' moves (shots,
+  steals, tricks and the like) play about twice as fast as they should. The
+  clock, the turbo and Gamebreaker meters, the camera fly-by before tip-off,
+  the player introductions, replays and a held direction in menus keep their
+  speed. Use 60 for normal play. On a busy PC some pictures are left out to
+  keep the game's speed.
+- **3D on the graphics card is experimental and off by default** (Settings,
+  Display). It has been tested on an NVIDIA card and on Windows' own software
+  graphics; AMD and Intel graphics are untested. Each start checks the card's
+  first 3D results against the processor's and turns it off by itself if they
+  differ, writing why in `logs\game.log`. If a picture looks wrong with it on,
+  turn it off and report the screen.
 - **"Menus wide" and "All wide" stretch flat screens** to the display's
   width, by design: menus, films, and the rendered player pictures on the
   player selection screens look wider than on a console. "4:3" keeps them in
@@ -80,6 +87,6 @@ welcome as issues.
 - With Windows' Smart App Control on, setup builds and runs a small test
   program first and stops if Windows blocks it. This is untested with the
   feature on.
-- **The first update from 0.1.0 rebuilds the whole game once**, which takes a
-  few minutes, about as long as the first setup's build. Later updates
-  recompile only the files that changed.
+- **Some updates rebuild the whole game once:** from 0.1.0 to 0.1.1, and to
+  0.1.3. That takes a few minutes, about as long as the first setup's build.
+  Other updates recompile only the files that changed.

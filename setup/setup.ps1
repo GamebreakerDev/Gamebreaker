@@ -499,11 +499,22 @@ Step 'disc' {
 
 Step 'lift' {
     $xbe = Join-Path $game 'default.xbe'
-    $fp = Get-Sha ((@($GbXbeSha256, (Get-Content (Done 'toolkit') -Raw).Trim()) +
-                    @('config\seed_functions.json', 'src\recomp_manual.c', 'tools\pipeline.ps1' | ForEach-Object { "$_|$(Get-FileSha (Join-Path $portDir $_))" })) -join "`n")
+    # Lift again only when something the lift reads changed: from the toolkit
+    # its Python tools and one template (not its C runtime, so a change to the
+    # project's patch there needs no new lift), the pinned interpreter and
+    # capstone, and from src\recomp_manual.c only what the lifter takes from it
+    # (the toolkit's own scan: an edit inside a hand-written function needs no
+    # new lift). The same inputs as Get-GbLiftInputs in port\tools\pipeline.ps1,
+    # which the release's list carries so the update check can tell the player
+    # how long the rebuild takes.
+    $stepCache = $true
+    $pins = @($entries | Where-Object { $_.name -in 'python', 'capstone' } | ForEach-Object { "$($_.name)|$($_.sha256)" })
+    $fp = Get-Sha ((@($GbStepCacheVersion, $GbXbeSha256, "lift-tools|$(Get-GbLiftToolsKey $toolkit)") + $pins +
+                    @("manual-scan|$(Get-GbManualKey $python $toolkit (Join-Path $portDir 'src\recomp_manual.c'))") +
+                    @('config\seed_functions.json', 'tools\pipeline.ps1' | ForEach-Object { "$_|$(Get-FileSha (Join-Path $portDir $_))" })) -join "`n")
     if ((Test-Done 'lift' $fp) -and (Test-Path (Join-Path $gen 'recomp_funcs.h'))) { Say 'Lift' 'up to date'; return }
     $script:changed++
-    Say 'Lift' 'parse, disassemble, identify, ABI, lift (about 3 minutes)'
+    Say 'Lift' 'parse, disassemble, identify, ABI, lift (up to about 3 minutes; steps whose inputs did not change are kept)'
     # Into a fresh folder, then copied over the old one file by file: files
     # that did not change keep their times (so the compile skips them), and a
     # file the new lift no longer writes is removed.
@@ -512,7 +523,7 @@ Step 'lift' {
     $new = "$gen.new"
     if (Test-Path $new) { Invoke-GbRetry { Remove-Item $new -Recurse -Force } 'The lifted code folder' }
     $t = Invoke-GbLift -Python $python -Toolkit $toolkit -Xbe $xbe -PortDir $portDir -GenDir $new `
-            -AnalysisDir (Join-Path $work 'analysis') -Log $script:log -Quiet `
+            -AnalysisDir (Join-Path $work 'analysis') -Log $script:log -Quiet -StepCache:$stepCache `
             -OnStep { param($n, $s)
                 Say '' ("{0,-8} {1,5:N0} s" -f $n, $s)
                 Emit @{ ev = 'lift'; sub = $n; state = 'done'; secs = [math]::Round($s, 1) }

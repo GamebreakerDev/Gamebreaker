@@ -189,13 +189,27 @@ function Get-Changes($m) {
     @{ changed = $changed; removed = $removed }
 }
 # What has to be built again: 'full' (the lift runs again), 'quick' (a few files and a link) or 'none'.
-function Get-RebuildKind([string[]]$paths) {
+# A release's list carries lift_key, a digest of everything the lift reads
+# (port\tools\pipeline.ps1, Get-GbLiftInputsKey). When the installed release
+# and the new one carry the same key, setup keeps the lifted code (its step
+# cache), so a change to the toolkit patch's C part, to recomp_manual.c inside
+# its functions or to the config folder only compiles again. Without a key on
+# both sides (releases before 0.1.3), any of those counts as a new lift.
+# A new tools.lock means new tools to fetch and everything compiled again.
+function Get-RebuildKind([string[]]$paths, [string]$newKey = '', [string]$ownKey = '') {
+    $sameLift = $newKey -and ($newKey -eq $ownKey)
     $kind = 'none'
     foreach ($p in $paths) {
-        if ($p -match '^(port/config/|port/patches/|port/src/recomp_manual\.c$|xboxrecomp/|setup/tools\.lock$|setup/apply_patch\.py$|port/tools/pipeline\.ps1$)') { return 'full' }
-        if ($p -match '^port/') { $kind = 'quick' }
+        if ($p -match '^(xboxrecomp/|setup/tools\.lock$)') { return 'full' }
+        if (-not $sameLift -and $p -match '^(port/config/|port/patches/|port/src/recomp_manual\.c$|setup/apply_patch\.py$|port/tools/pipeline\.ps1$)') { return 'full' }
+        if ($p -match '^(port/|setup/apply_patch\.py$)') { $kind = 'quick' }
     }
     $kind
+}
+# The lift key of the installed release's own list ('' before 0.1.3).
+function Get-OwnLiftKey {
+    $own = Read-Json (Join-Path $rootDir 'setup\manifest.json')
+    if ($own -and $own.lift_key) { [string]$own.lift_key } else { '' }
 }
 function Test-GameRunning {
     if (-not $Folder) { return $false }
@@ -261,7 +275,7 @@ try {
         $bytesNeeded = [long]0; $seen = @{}
         foreach ($f in $c.changed) { if (-not $seen.ContainsKey($f.sha256)) { $seen[$f.sha256] = $true; $bytesNeeded += [long]$f.size } }
         $paths = @($c.changed | ForEach-Object { [string]$_.path }) + $c.removed
-        $kind = Get-RebuildKind $paths
+        $kind = Get-RebuildKind $paths ([string]$m.lift_key) (Get-OwnLiftKey)
         # The files' base: the manifest's own entry, else beside the manifest.
         $base = $(if ($m.files_base) { [string]$m.files_base } elseif ($murl -match '^https?://') { $murl.Substring(0, $murl.LastIndexOf('/')) } else { Split-Path $murl })
         Save-Json ([ordered]@{ manifest = $m; base = $base; from = $current; checked = (Get-Date).ToUniversalTime().ToString('o') }) $pendingFile
@@ -331,7 +345,7 @@ try {
         $changedList = @($c.changed | ForEach-Object { [ordered]@{ path = [string]$_.path; existed = (Test-Path -LiteralPath (Local-Path $_.path) -PathType Leaf) } })
         $launcherTouched = [bool](@($changedList | ForEach-Object { $_.path }) + $c.removed | Where-Object { $_ -match '^(launcher/|Gamebreaker\.exe$)' })
         $j = [ordered]@{ state = 'applying'; from = $current; to = [string]$m.version; folder = $Folder; backup = $bak
-                         changed = $changedList; removed = @($c.removed); launcher = $launcherTouched; rebuild = (Get-RebuildKind (@($changedList | ForEach-Object { $_.path }) + $c.removed))
+                         changed = $changedList; removed = @($c.removed); launcher = $launcherTouched; rebuild = (Get-RebuildKind (@($changedList | ForEach-Object { $_.path }) + $c.removed) ([string]$m.lift_key) (Get-OwnLiftKey))
                          started = (Get-Date).ToUniversalTime().ToString('o'); shown = $false; reason = '' }
         Save-Json $j $journalFile
         if ($Folder) {

@@ -5,6 +5,31 @@ What changes for a player in each release, newest first. The format follows
 
 ## Unreleased
 
+## 0.1.3 - 2026-11-28
+
+- Updating to 0.1.3 rebuilds the whole game once, about three to four minutes,
+  like the first setup. Your settings, saves and mods are kept.
+- A match needs about a third less processor time. The picture is the same;
+  the saving helps slower processors and 120 frames a second.
+- New, experimental and off by default: "3D on the graphics card" in Settings,
+  Display. The graphics card does the 3D work the processor did, which takes
+  much of the load off the processor and helps 120 frames a second hold. Each
+  time the game starts it checks the card's first 3D results against the
+  processor's and turns the setting off by itself if they differ. If a picture
+  looks wrong with it on, turn it off.
+- "Skip intro film" now leaves the intro film out entirely: the title screen
+  comes straight after the legal notice, about 20 seconds after start instead
+  of about 24, with no part of the film shown or heard.
+- Fixed: with a wide screen shape, the player in Create A Baller's preview
+  panel could be drawn too wide or outside the panel.
+- The first setup builds the game about a minute faster.
+- Frame rate 120 with Vertical sync on now runs at full speed on 120 Hz
+  screens; before, menus there could run slow.
+- Frame rate 120: holding a direction in a menu no longer scrolls twice as
+  fast as at 60.
+- Updates after this one that do not change how the game itself is built take
+  under a minute, and the update notice says which kind of rebuild comes.
+
 ## 0.1.2 - 2026-11-22
 
 - Fixed: in 0.1.1 a controller was not read at all unless "Four-player

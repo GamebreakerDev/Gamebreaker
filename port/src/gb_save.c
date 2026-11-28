@@ -233,7 +233,7 @@ void gb_log_header(void)
         "GB_COMMENTARY", "GB_AUDIO_MONO", "GB_AUDIO_TICK", "GB_AUDIO_LEAD_MS",
         "GB_AUDIO_WAIT", "GB_AUDIO_GUARD", "GB_PADS", "GB_PAD_PRESET", "GB_PAD_TRIGGER",
         "GB_PAD_RUMBLE", "GB_PAD_ORDER", "GB_PAD_KEYBOARD_PLAYER", "GB_PAD_BACKGROUND",
-        "GB_PAD_DEADZONE", "GB_CHEATS", "GB_UNLOCK_ALL", "GB_MODS", "GB_MODS_DIR",
+        "GB_PAD_DEADZONE", "GB_CHEATS", "GB_UNLOCK_ALL", "GB_MODS", "GB_MODS_DIR", "GB_VSH_GPU",
     };
     char line[1024], cpu[128] = "unknown processor";
     int at = 0;

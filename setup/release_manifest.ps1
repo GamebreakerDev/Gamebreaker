@@ -13,6 +13,8 @@
 #     "commit": "abc1234", "released": "2026-11-17T08:00:00Z",
 #     "notes": ["one line per change"],
 #     "files_base": "",            where the files are: empty = beside the manifest
+#     "lift_key": "<64 hex>",      what the lift reads (port\tools\pipeline.ps1, Get-GbLiftInputsKey);
+#                                  from 0.1.3, so an update check can tell whether the update lifts again
 #     "files": [ { "path": "setup/setup.ps1", "size": 1234, "sha256": "<64 hex>" }, ... ] }
 # Paths use forward slashes and are relative to the release's app folder.
 #
@@ -51,13 +53,14 @@ function Get-GbReleaseFiles([string]$Root) {
 }
 
 # Writes <Root>\setup\manifest.json and returns the manifest.
-function New-GbManifest([string]$Root, [string]$Version, [string]$Commit, [string[]]$Notes = @(), [string]$FilesBase = '') {
+function New-GbManifest([string]$Root, [string]$Version, [string]$Commit, [string[]]$Notes = @(), [string]$FilesBase = '', [string]$LiftKey = '') {
     $m = [ordered]@{
         format = 1; product = 'Gamebreaker'; version = $Version; commit = $Commit
         released = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         notes = @($Notes | Where-Object { $_ }); files_base = $FilesBase
-        files = @(Get-GbReleaseFiles $Root)
     }
+    if ($LiftKey) { $m['lift_key'] = $LiftKey }
+    $m['files'] = @(Get-GbReleaseFiles $Root)
     $json = $m | ConvertTo-Json -Depth 5
     [IO.File]::WriteAllText((Join-Path $Root 'setup\manifest.json'), $json + "`n", (New-Object Text.UTF8Encoding($false)))
     $m

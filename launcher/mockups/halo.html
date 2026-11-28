@@ -1347,6 +1347,10 @@ b { font-weight: 650; }
                   </div>
                 </div>
                 <div class="row">
+                  <div class="row-text"><div class="row-label">3D on the graphics card</div><div class="row-desc">Experimental. Turn off if a picture looks wrong</div></div>
+                  <div class="row-control"><button class="toggle" role="switch" data-setting="gpuVertex" aria-checked="false" aria-label="3D on the graphics card"><span class="toggle-track"><span class="toggle-knob"></span></span></button></div>
+                </div>
+                <div class="row">
                   <div class="row-text"><div class="row-label">Frame counter</div></div>
                   <div class="row-control"><button class="toggle" role="switch" data-setting="showFps" aria-checked="false" aria-label="Frame counter"><span class="toggle-track"><span class="toggle-knob"></span></span></button></div>
                 </div>
@@ -1645,11 +1649,11 @@ b { font-weight: 650; }
                   <div class="row-control"><button class="toggle" role="switch" data-setting="cheat_big_heads" aria-checked="false" aria-label="Big Heads"><span class="toggle-track"><span class="toggle-knob"></span></span></button></div>
                 </div>
                 <div class="row" data-cheat-row>
-                  <div class="row-text"><div class="row-label">WNBA Ball</div><div class="row-desc">WNBA ball. Replaces Alternate Ball</div></div>
-                  <div class="row-control"><button class="toggle" role="switch" data-setting="cheat_wnba_ball" aria-checked="false" aria-label="WNBA Ball"><span class="toggle-track"><span class="toggle-knob"></span></span></button></div>
+                  <div class="row-text"><div class="row-label">Women's ball</div><div class="row-desc">Women's game ball. Replaces Alternate Ball</div></div>
+                  <div class="row-control"><button class="toggle" role="switch" data-setting="cheat_wnba_ball" aria-checked="false" aria-label="Women's ball"><span class="toggle-track"><span class="toggle-knob"></span></span></button></div>
                 </div>
                 <div class="row" data-cheat-row>
-                  <div class="row-text"><div class="row-label">Alternate Ball</div><div class="row-desc">Red, white and blue ball. Replaces WNBA Ball</div></div>
+                  <div class="row-text"><div class="row-label">Alternate Ball</div><div class="row-desc">Red, white and blue ball. Replaces Women's ball</div></div>
                   <div class="row-control"><button class="toggle" role="switch" data-setting="cheat_alternate_ball" aria-checked="false" aria-label="Alternate Ball"><span class="toggle-track"><span class="toggle-knob"></span></span></button></div>
                 </div>
                 <div class="row" data-cheat-row>
@@ -2189,7 +2193,7 @@ const S = {
   set: {
     theme: M.defaultTheme || 'system', motion: 'full', size: 'auto',
     windowMode: 'window', monitor: 0, res: 'fit', aspect: '16:9', aspect2d: 'stretch', fps: 0, gameHz: '60', vsync: true,
-    aniso: '16', msaa: '4', gpuPref: 'default',
+    aniso: '16', msaa: '4', gpuPref: 'default', gpuVertex: false,
     skipIntro: true, pauseBg: true, songRotate: true, demoDelay: '90', rumbleOn: true, mouseMenus: false,
     smoothAudio: true, bgAudio: true, volume: 100,
     volMusic: 100, volSfx: 100, volCrowd: 100, volPlayers: 100, volCommentary: 100, commentary: true, mono: false, showFps: false, texDump: false,
@@ -2214,7 +2218,7 @@ const scenario = () => SCEN[S.set.scenario] || 'ok';
    that time's default counts as chosen, and one equal to it as not chosen. */
 const PERSIST = ['theme', 'size', 'windowMode', 'monitor', 'res', 'aspect', 'aspect2d', 'gameHz', 'vsync', 'aniso', 'msaa', 'skipIntro', 'smoothAudio', 'bgAudio', 'volume',
   'pads', 'preset', 'trigger', 'deadzone', 'rumble1', 'rumble2', 'rumble3', 'rumble4', 'padOrder', 'kbPlayer', 'padBg', 'gpuPref', 'updates', 'sound', 'mods',
-  'pauseBg', 'songRotate', 'demoDelay', 'rumbleOn', 'mouseMenus',
+  'pauseBg', 'songRotate', 'demoDelay', 'rumbleOn', 'mouseMenus', 'gpuVertex',
   'volMusic', 'volSfx', 'volCrowd', 'volPlayers', 'volCommentary', 'commentary', 'mono', 'showFps', 'texDump',
   'cheats', 'cheat_street_kids', 'cheat_no_counters', 'cheat_gb_trails', 'cheat_all_quicks', 'cheat_unlimited_turbo', 'cheat_easy_2_pointers', 'cheat_hard_2_pointers', 'cheat_big_heads', 'cheat_wnba_ball', 'cheat_alternate_ball', 'cheat_no_hud', 'cheat_explosive_rims'];
 /* The renderer is always Direct3D 11 (the slow reference renderer was removed

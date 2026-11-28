@@ -97,10 +97,150 @@ function Invoke-GbPyStep([string]$Name, [string[]]$Python, [string]$Toolkit, [st
     return $sec
 }
 
-# Parse, disassemble, identify, ABI, lift. Returns the seconds each step took.
+# ---- The step cache (-StepCache below; on in setup.ps1 and regen.ps1) -----
+# Each analysis step (parse, disassemble, identify, ABI) is a pure function of
+# what it reads: the toolkit's Python tools, the interpreter and capstone, the
+# step's own arguments, default.xbe, the seed list (disassemble only), and the
+# files the steps before it wrote. A step whose key is unchanged since the run
+# that wrote its outputs, and whose outputs are still there byte for byte, is
+# not run again: its output would be the same bytes. The lift is keyed the same
+# way plus what it takes from src\recomp_manual.c (Get-GbManualKey) and the
+# indirect-call list it reads when present; its outputs are the lifted files,
+# so it is kept only when -GenDir still holds them (the developer layout).
+# setup\setup.ps1 lifts into a fresh folder and decides by its own fingerprint
+# whether to lift at all. A step that is cut short leaves no record, so the
+# next run makes it again; a record whose files were changed or removed since
+# is not used.
+
+$GbStepCacheVersion = 'gb-step-cache 1'
+
+function Get-GbBytesSha([byte[]]$b) {
+    $h = [Security.Cryptography.SHA256]::Create()
+    try { -join ($h.ComputeHash($b) | ForEach-Object { $_.ToString('x2') }) } finally { $h.Dispose() }
+}
+function Get-GbTextSha([string]$s) { Get-GbBytesSha ([Text.Encoding]::UTF8.GetBytes($s)) }
+function Get-GbFileShaFast([string]$p) {
+    $h = [Security.Cryptography.SHA256]::Create(); $f = [IO.File]::OpenRead($p)
+    try { -join ($h.ComputeHash($f) | ForEach-Object { $_.ToString('x2') }) } finally { $f.Dispose(); $h.Dispose() }
+}
+
+# What the lift can read from the toolkit: its Python tools (tools\, without
+# the in-tree output folders and byte-code caches) and the one template the
+# lifter copies beside the lifted code. Not src\, the C runtime: only the
+# compile reads it, so a change there (the project's toolkit patch) does not
+# change a single lifted byte.
+function Get-GbLiftToolsKey([string]$Toolkit) {
+    $root = [IO.Path]::GetFullPath($Toolkit).TrimEnd('\')
+    $files = @(Get-ChildItem (Join-Path $root 'tools') -Recurse -File -Force | Where-Object {
+        $_.FullName -notmatch '\\tools\\[^\\]+\\output(\\|$)' -and $_.FullName -notmatch '\\__pycache__\\'
+    })
+    $tpl = Join-Path $root 'templates\runtime\recomp_types.h'
+    if (Test-Path $tpl) { $files += Get-Item $tpl }
+    $lines = @($files | ForEach-Object { $_.FullName.Substring($root.Length + 1) + '|' + (Get-GbFileShaFast $_.FullName) } | Sort-Object)
+    Get-GbTextSha ($lines -join "`n")
+}
+
+# The interpreter and the disassembler library the steps run with.
+function Get-GbPythonId([string[]]$Python) {
+    # Single quotes only: Windows PowerShell 5.1 does not escape double quotes
+    # inside an argument it passes to a native program.
+    $code = "import sys,os,hashlib,capstone`n" +
+            "print(sys.version); print(getattr(capstone, '__version__', '?'))`n" +
+            "d = os.path.dirname(capstone.__file__)`n" +
+            "for r, ds, fs in os.walk(d):`n" +
+            "    ds.sort()`n" +
+            "    for n in sorted(fs):`n" +
+            "        if n.endswith(('.dll', '.pyd', '.so', '.py')):`n" +
+            "            print(os.path.relpath(os.path.join(r, n), d), hashlib.sha256(open(os.path.join(r, n), 'rb').read()).hexdigest())"
+    $r = Invoke-GbNative $Python[0] (@($Python | Select-Object -Skip 1) + @('-c', $code)) '' ''
+    if ($r.Code -ne 0) { throw "Python could not report its version and capstone's files (exit $($r.Code))." }
+    Get-GbTextSha ($r.Lines -join "`n")
+}
+
+# What the lift takes from src\recomp_manual.c: only the four sets of addresses
+# the toolkit's own scanner (tools.recomp.manual_scan) finds there, the
+# functions defined by hand, wrapped, mentioned, and given an entry hook. No
+# lifted file holds anything else of it, so an edit inside a hand-written
+# function changes no lifted byte and needs no new lift. Run with the
+# toolkit's scanner itself, so the two cannot disagree.
+function Get-GbManualKey([string[]]$Python, [string]$Toolkit, [string]$Manual) {
+    $code = "import sys`nfrom tools.recomp.manual_scan import scan, entry_hooks`n" +
+            "p = sys.argv[1]`ns, w, r = scan(p)`n" +
+            "print('skip', sorted(s))`nprint('wrap', sorted(w))`nprint('referenced', sorted(r))`nprint('enter', sorted(entry_hooks(p)))"
+    $r = Invoke-GbNative $Python[0] (@($Python | Select-Object -Skip 1) + @('-c', $code, $Manual)) $Toolkit ''
+    if ($r.Code -ne 0) { throw "The toolkit's scanner could not read $Manual (exit $($r.Code))." }
+    Get-GbTextSha ($r.Lines -join "`n")
+}
+
+# What the lift reads, taken from a release's own files: the pinned toolkit,
+# Python and capstone (setup\tools.lock), the parts of the project's toolkit
+# patches that reach the toolkit's Python tools or the template the lifter
+# copies, what the toolkit's scanner finds in port\src\recomp_manual.c, the
+# seed list and this file. Each release's list carries it as lift_key
+# (setup\release_manifest.ps1), and the update check (setup\update.ps1) compares the
+# installed release's key with the new one's to tell the player whether the
+# update lifts again. setup.ps1 decides by the same inputs as found on the
+# player's PC.
+function Get-GbLiftInputsKey([string[]]$Python, [string]$Toolkit, [string]$AppRoot) {
+    $lines = @($GbStepCacheVersion)
+    $lock = Get-Content (Join-Path $AppRoot 'setup\tools.lock') -Raw | ConvertFrom-Json
+    foreach ($e in @($lock.tools | Where-Object { $_.name -in 'xboxrecomp', 'python', 'capstone' } | Sort-Object name)) {
+        $lines += "lock|$($e.name)|$($e.sha256)|$($e.tree_sha256)"
+    }
+    foreach ($p in @(Get-ChildItem (Join-Path $AppRoot 'port\patches') -Filter '*.patch' | Sort-Object Name)) {
+        $text = [IO.File]::ReadAllText($p.FullName).Replace("`r`n", "`n")
+        foreach ($sec in ($text -split '(?m)^(?=diff --git )')) {
+            if ($sec -match '^diff --git a/(\S+)' -and ($Matches[1] -like 'tools/*' -or $Matches[1] -eq 'templates/runtime/recomp_types.h')) {
+                $lines += "patch|$($p.Name)|$($Matches[1])|$(Get-GbTextSha $sec)"
+            }
+        }
+    }
+    $lines += "manual|$(Get-GbManualKey $Python $Toolkit (Join-Path $AppRoot 'port\src\recomp_manual.c'))"
+    foreach ($f in 'port\config\seed_functions.json', 'port\tools\pipeline.ps1') {
+        $lines += "file|$f|$(Get-GbFileShaFast (Join-Path $AppRoot $f))"
+    }
+    Get-GbTextSha ($lines -join "`n")
+}
+
+# The files a step wrote that later steps read: everything in its output
+# folder except our record, the disassembler's .asm listings (written for
+# people, read by no step) and its own timestamped cache note.
+function Get-GbStepOutputs([string]$Dir) {
+    if (-not (Test-Path $Dir)) { return @() }
+    $root = [IO.Path]::GetFullPath($Dir).TrimEnd('\')
+    @(Get-ChildItem $root -Recurse -File -Force | Where-Object {
+        $rel = $_.FullName.Substring($root.Length + 1)
+        $rel -ne '.gb_step.json' -and $rel -ne '.disasm_cache.json' -and $rel -notmatch '^asm(\\|$)' -and $rel -notmatch '(^|\\)__pycache__\\'
+    } | ForEach-Object { $_.FullName.Substring($root.Length + 1) + '|' + (Get-GbFileShaFast $_.FullName) } | Sort-Object)
+}
+
+# The outputs recorded for $Key, when they are all still there unchanged; else $null.
+function Test-GbStepRecord([string]$Dir, [string]$Key, [string]$OutRoot = '') {
+    if (-not $OutRoot) { $OutRoot = $Dir }
+    $rec = Join-Path $Dir '.gb_step.json'
+    if (-not (Test-Path $rec)) { return $null }
+    try { $j = Get-Content $rec -Raw | ConvertFrom-Json } catch { return $null }
+    if ($j.version -ne $GbStepCacheVersion -or $j.key -ne $Key -or -not $j.outputs) { return $null }
+    $now = Get-GbStepOutputs $OutRoot
+    $want = @($j.outputs)
+    if (($now -join "`n") -ne ($want -join "`n")) { return $null }
+    return $want
+}
+
+function Save-GbStepRecord([string]$Dir, [string]$Key, [string[]]$Outputs) {
+    $rec = Join-Path $Dir '.gb_step.json'
+    $tmp = "$rec.tmp"
+    ([ordered]@{ version = $GbStepCacheVersion; key = $Key; outputs = @($Outputs) } | ConvertTo-Json -Depth 3) | Set-Content -Path $tmp -Encoding utf8
+    Move-Item $tmp $rec -Force
+}
+
+# Parse, disassemble, identify, ABI, lift. Returns the seconds each step took
+# (0 for a step the step cache found unchanged).
 #   -AnalysisDir  where the intermediate results go. Leave it out to use the
 #                 toolkit's in-tree tools\*\output folders (the developer
 #                 layout, which tools.seed_from_log and others expect).
+#   -StepCache    skip an analysis step whose inputs are unchanged since its
+#                 outputs were written (see "The step cache" above).
 function Invoke-GbLift {
     param(
         [Parameter(Mandatory)] [string[]]$Python,
@@ -111,6 +251,7 @@ function Invoke-GbLift {
         [string]$AnalysisDir = '',
         [string]$Log = '',
         [switch]$Quiet,
+        [switch]$StepCache,
         [scriptblock]$OnStep = $null       # called with (name, seconds) after each step
     )
     $seeds  = Join-Path $PortDir 'config\seed_functions.json'
@@ -150,10 +291,54 @@ function Invoke-GbLift {
             @('lift',    @('tools.recomp', $Xbe, '--all', '--split', '250', '--game-name', 'Gamebreaker', '--gen-dir', $GenDir, '--exclude-manual', $manual))
         )
     }
+    # Where each step keeps its record for the step cache, and (the lift) where
+    # its outputs are when that is somewhere else: the lifted code itself.
+    if ($AnalysisDir) {
+        $outDir = @{ parse = $d.parse; disasm = $d.disasm; func_id = $d.func_id; abi = $d.abi; lift = $d.recomp }
+        $icall = Join-Path $d.recomp 'icall_sites.json'
+    } else {
+        $outDir = @{ parse = $parseOut; disasm = (Join-Path $Toolkit 'tools\disasm\output')
+                     func_id = (Join-Path $Toolkit 'tools\func_id\output'); abi = (Join-Path $Toolkit 'tools\abi_analysis\output')
+                     lift = (Join-Path $Toolkit 'tools\recomp\output') }
+        $icall = Join-Path $Toolkit 'tools\recomp\output\icall_sites.json'     # the lifter's default, read when present
+    }
+    $outRoot = @{ lift = $GenDir }
+    $prev = New-Object Collections.Generic.List[string]     # "step|file|sha" of every output so far
+    if ($StepCache) {
+        $base = @($GbStepCacheVersion, "tools|$(Get-GbLiftToolsKey $Toolkit)", "python|$(Get-GbPythonId $Python)", "xbe|$(Get-GbFileShaFast $Xbe)")
+    }
     foreach ($s in $steps) {
-        $sec = Invoke-GbPyStep $s[0] $Python $Toolkit $s[1] $Log -Quiet:$Quiet
-        $times[$s[0]] = $sec
-        if ($OnStep) { & $OnStep $s[0] $sec }
+        $name = $s[0]
+        $key = $null
+        if ($StepCache -and $outDir.ContainsKey($name)) {
+            $lines = @($base) + @("step|$name") + @($s[1] | ForEach-Object { "arg|$_" }) + @($prev)
+            if ($name -eq 'disasm') { $lines += "seeds|$(Get-GbFileShaFast $seeds)" }
+            if ($name -eq 'lift') {
+                $lines += "manual|$(Get-GbManualKey $Python $Toolkit $manual)"
+                $lines += "icall|$(if (Test-Path $icall) { Get-GbFileShaFast $icall } else { 'none' })"
+            }
+            $key = Get-GbTextSha ($lines -join "`n")
+            # (Filtered: @($null) is an array of one element in PowerShell.)
+            $kept = @(Test-GbStepRecord $outDir[$name] $key $outRoot[$name] | Where-Object { $_ })
+            if ($kept.Count) {
+                foreach ($o in $kept) { $prev.Add("$name|$o") }
+                if (-not $Quiet) { Write-Host "== $name`n   unchanged since its last run: kept" }
+                if ($Log) { Add-Content -Path $Log -Value "> step cache: $name unchanged since its last run, kept ($($kept.Count) files)`n" -Encoding utf8 }
+                $times[$name] = 0.0
+                if ($OnStep) { & $OnStep $name 0.0 }
+                continue
+            }
+            # No valid record while the step runs: a run cut short leaves none.
+            Remove-Item (Join-Path $outDir[$name] '.gb_step.json') -Force -ErrorAction SilentlyContinue
+        }
+        $sec = Invoke-GbPyStep $name $Python $Toolkit $s[1] $Log -Quiet:$Quiet
+        $times[$name] = $sec
+        if ($key) {
+            $outs = @(Get-GbStepOutputs $(if ($outRoot[$name]) { $outRoot[$name] } else { $outDir[$name] }))
+            Save-GbStepRecord $outDir[$name] $key $outs
+            foreach ($o in $outs) { $prev.Add("$name|$o") }
+        }
+        if ($OnStep) { & $OnStep $name $sec }
     }
     return $times
 }

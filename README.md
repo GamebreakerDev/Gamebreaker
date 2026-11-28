@@ -14,7 +14,7 @@ compiles it on your PC, from your own disc.
 Xbox release.
 
 <p align="center">
-  <a href="https://github.com/GamebreakerDev/Gamebreaker/releases/download/v0.1.2/Gamebreaker-0.1.2.zip"><img src="docs/art/download.svg" alt="Download Gamebreaker 0.1.2 (zip)" width="220"></a>
+  <a href="https://github.com/GamebreakerDev/Gamebreaker/releases/download/v0.1.3/Gamebreaker-0.1.3.zip"><img src="docs/art/download.svg" alt="Download Gamebreaker 0.1.3 (zip)" width="220"></a>
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@ Xbox release.
 ## Install
 
 You need 64-bit Windows 10 (version 1809 or later) or Windows 11, a Direct3D 11
-graphics card, 3.5 GB of free disk space, an internet connection for setup, and a
+graphics card, 4.6 GB of free disk space, an internet connection for setup, and a
 dump of your own disc as an `.iso` or an extracted folder.
 
 1. Download the latest release, extract it and start `Gamebreaker.exe`.
@@ -59,7 +59,8 @@ Every game mode and all eleven courts are here, at the game's original speed.
 Play in a window or borderless fullscreen, at up to four times the original
 resolution, with texture filtering and anti-aliasing. The 16:10, 16:9, 21:9 and
 32:9 shapes show more of the court at the sides. 120 frames a second is available
-as an experimental option.
+as an experimental option, and so is 3D on the graphics card, which takes much of
+the work off the processor.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/art/shapes-dark.svg">
@@ -110,8 +111,9 @@ launcher, Settings, Keyboard.
 ## Status
 
 This is an early release. Every mode starts and plays, though a whole Be A Legend
-or Street School run has not been finished yet. Four controllers at once and 120
-frames a second are experimental, and Windows 10 and AMD graphics are untested.
+or Street School run has not been finished yet. Four controllers at once, 120
+frames a second and 3D on the graphics card are experimental, and Windows 10 and
+AMD graphics are untested.
 Rarely, the game can stop responding while the picture carries on; restarting it
 clears this.
 

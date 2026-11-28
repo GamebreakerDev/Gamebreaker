@@ -10,7 +10,7 @@ is for working on the port.
 - Python 3.10 or later on the `py` launcher, with capstone 5:
   `py -3 -m pip install capstone`.
 - Your own disc, extracted (below).
-- About 4 GB of free space.
+- About 4.6 GB of free space.
 
 Visual Studio is not needed. `port\tools\fetch_toolchain.ps1` downloads the
 compiler (llvm-mingw, a Clang for Windows), Ninja and CMake into `toolchain\`,
@@ -48,8 +48,14 @@ third-party notices).
    ```
 
    The port carries one patch to the toolkit,
-   `port\patches\0001-backend-batch-ext.patch`. `port\regen.ps1` applies it
-   (`port\patches\apply.ps1`); applying it again does nothing.
+   `port\patches\0001-backend-batch-ext.patch`. It changes seven of the
+   toolkit's files: `src/kernel/nv2a_backend.h`, `nv2a_pb_exec.c`,
+   `nv2a_vsh_interp.c`, `nv2a_vsh_interp.h` and `xbox_memory_layout.c`, and
+   `tools/disasm/engine.py` and `loader.py`. `port\regen.ps1` applies it
+   (`port\patches\apply.ps1`); applying it again does nothing. When a pull
+   changes the patch, first check out those seven files in `xboxrecomp\`
+   (`git -C xboxrecomp checkout -- <the seven paths>`), then run
+   `port\regen.ps1`.
 
 2. Extract your disc into `game_files\`, from inside `xboxrecomp\`:
 
@@ -86,6 +92,14 @@ lifting again. After pulling a change that wraps a new game function (in
 `port\src\recomp_manual.c` or `port\config\seed_functions.json`), run the full
 `port\regen.ps1` once.
 
+`port\regen.ps1` keeps each step (parse, disassembly, function identification,
+ABI analysis, lift) whose inputs have not changed since its last run, so a run
+with nothing new takes seconds; `-NoCache` runs every step. The lift is kept
+unless the toolkit's tools, the patch, the seeds or the hand-written functions
+the lifter reads from `recomp_manual.c` changed. Setup does the same for
+players, and each release's list carries the same key, so the launcher can
+say before an update whether the game is lifted again.
+
 ## The pinned executable
 
 The port is built against one exact `default.xbe`: the USA retail release,
@@ -115,9 +129,10 @@ variables the launcher sets; they work the same from a prompt:
 | `GB_D3D11_ANISO` | 0, 1, 2, 4, 8, 16 |
 | `GB_D3D11_MSAA` | 0, 2, 4, 8 |
 | `GB_D3D11_ADAPTER` | `high` for the fastest graphics chip; unset: Windows' choice |
+| `GB_VSH_GPU` | 1 for 3D on the graphics card (experimental; checked against the processor at the first 3D scene, off by itself if they differ) |
 | `GB_SHOW_FPS` | 1 for the frame counter |
 | `GB_GAME_HZ` | 60, 120 (experimental) |
-| `GB_SKIP_INTRO` | 1 to end the intro film early |
+| `GB_SKIP_INTRO` | 1 to leave out the intro film (the title screen follows the legal notice) |
 | `GB_PAUSE_BACKGROUND` | 0 to keep a match running when the window is not in front (unset: it pauses) |
 | `GB_RUMBLE` | 0 for no controller vibration |
 | `GB_SONG_ROTATION` | 0 to keep one song instead of changing it each game |
@@ -169,7 +184,8 @@ saves a screenshot. Ctrl+F9 switches the texture dump on and off.
   the write guard, the log file and the error box), `gb_mods.c` (the mods
   folder, archive and pack pieces), `gb_textures.c` (pictures replaced by
   fingerprint, the texture dump), `gb_cpu.c` (thread placement on processors
-  with performance and efficiency cores).
+  with performance and efficiency cores), `gb_vsh_gpu.c` and `gb_vsh.hlsl`
+  (3D on the graphics card: the game's vertex programs run in a shader).
 - `port\config\seed_functions.json` lists function addresses the
   disassembler cannot find by itself (reached only through pointers).
 - Fixes belong in `port\`: wrap or replace the game function, or use one of

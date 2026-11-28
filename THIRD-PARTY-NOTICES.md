@@ -29,7 +29,8 @@ covered by its notice below:
 | `port/src/recomp_manual.c` | Started from `templates/new-game/src/recomp_manual.c` |
 | `port/CMakeLists.txt` | Started from `templates/new-game/CMakeLists.txt` |
 | `port/.gitignore` | The template's file, unchanged |
-| `port/patches/0001-backend-batch-ext.patch` | A change to `src/kernel/nv2a_backend.h`, `nv2a_pb_exec.c`, `nv2a_vsh_interp.c`, `nv2a_vsh_interp.h` and `xbox_memory_layout.c`; its context lines are the toolkit's code |
+| `port/patches/0001-backend-batch-ext.patch` | A change to `src/kernel/nv2a_backend.h`, `nv2a_pb_exec.c`, `nv2a_vsh_interp.c`, `nv2a_vsh_interp.h`, `xbox_memory_layout.c`, `tools/disasm/engine.py` and `tools/disasm/loader.py`; its context lines are the toolkit's code |
+| `port/src/gb_vsh.hlsl` | A transcription of the toolkit's vertex program interpreter, `src/kernel/nv2a_vsh_interp.c`, and of how its executor passes a vertex on |
 | `port/src/gb_d3d11.c` | Its pixel shader follows the toolkit's register-combiner evaluator, `src/kernel/nv2a_combiner.c` |
 | `port/src/gb_pad.c`, `port/src/gb_pad_logic.c` | Replace the toolkit's `src/input/xinput_device.c`; the default controller path reproduces that file's Windows code |
 

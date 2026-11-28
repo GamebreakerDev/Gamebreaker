@@ -990,6 +990,11 @@ function Get-GameEnv($set) {
     # MOUSE_MENUS_READY in core.js): a saved "on" from a test build counts for
     # nothing while the row is hidden.
     if ($script:MouseMenusReady -and $set.mouseMenus -eq $true) { $ge.GB_MOUSE_MENUS = '1' }
+    # 3D on the graphics card (GB_VSH_GPU, port\src\gb_vsh_gpu.c): Experimental,
+    # off unless chosen; off passes nothing (the game's own default is off). The
+    # game checks the card against the processor and turns it off by itself if
+    # they disagree.
+    if ($set.gpuVertex -eq $true) { $ge.GB_VSH_GPU = '1' }
     # Mods: the game reads <install>\mods by itself (beside GB_SAVE_DIR); the
     # page's one switch turns every mod off for this start.
     if ($set.mods -eq $false) { $ge.GB_MODS = '0' }

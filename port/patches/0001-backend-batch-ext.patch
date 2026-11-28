@@ -1,5 +1,5 @@
 diff --git a/src/kernel/nv2a_backend.h b/src/kernel/nv2a_backend.h
-index 87788ed..1fa016e 100644
+index 87788ed..bbd62f2 100644
 --- a/src/kernel/nv2a_backend.h
 +++ b/src/kernel/nv2a_backend.h
 @@ -20,14 +20,16 @@
@@ -33,7 +33,7 @@ index 87788ed..1fa016e 100644
  } Nv2aTexture;
  
  typedef struct {
-@@ -80,13 +86,47 @@ typedef struct {
+@@ -80,15 +86,68 @@ typedef struct {
       * that ignores these draws that pass over the whole surface. */
      uint32_t stencil_enable, stencil_func, stencil_ref, stencil_func_mask;
      uint32_t stencil_write_mask, stencil_fail, stencil_zfail, stencil_zpass;
@@ -80,9 +80,51 @@ index 87788ed..1fa016e 100644
 +    const Nv2aBatchExt *ext;        /* never NULL from the executor */
  } Nv2aBatch;
  
++/* A batch that runs the title's vertex program, offered to the back end
++ * before the executor transforms it (Nv2aBackend.draw_program). Everything in
++ * it is valid only during the call. */
++typedef struct {
++    uint32_t prim;                  /* NV097 primitive: 5 triangles, 6 strip, 7 fan, 8 quads, 9 quad strip, 10 polygon */
++    const uint32_t *indices;        /* vertex indices in draw order */
++    uint32_t count;
++    uint32_t arrays;                /* bit a: attribute a comes from an array; else its current value */
++    const float (*current)[4];      /* the 16 current attribute values (SET_VERTEX_DATA*) */
++    const uint32_t (*program)[4];   /* program memory, NV2A_VSH_SLOTS instructions of four dwords */
++    uint32_t start_slot, program_revision;
++    const float (*constants)[4];    /* c[0..191] */
++    float aa_sx, aa_sy;             /* the surface scale the executor applies to x and y */
++    uint32_t fog_enable, fog_mode;  /* the fog unit that follows the program */
++    float fog_param[2];
++    const Nv2aRenderState *state;
++    const Nv2aBatchExt *ext;        /* ext->vertices is NULL */
++} Nv2aProgramBatch;
++
  typedef struct {
+     /* flags: CLEAR_SURFACE bits (Z 0x1, stencil 0x2, colour 0xF0).
+      * zstencil: SET_ZSTENCIL_CLEAR_VALUE (depth in the top 24 bits for Z24S8). */
+@@ -96,8 +155,20 @@ typedef struct {
+                   uint32_t flags, uint32_t argb, uint32_t zstencil);
+     void (*draw)(const Nv2aSurface *s, const Nv2aBatch *b);
+     void (*flip)(void);
++    /* Optional (may be NULL). A vertex-program batch, before the executor
++     * transforms it. Return 1 when the back end has drawn it (running the
++     * program itself); 0 to leave it to the executor, which then transforms
++     * the batch on the CPU and calls draw() as without this member. */
++    int (*draw_program)(const Nv2aSurface *s, const Nv2aProgramBatch *b);
+ } Nv2aBackend;
+ 
++/* For use inside draw_program. fetch_attr: attribute `attr` of vertex `index`
++ * as the executor's own interpreter would read it (array or current value).
++ * transform: that vertex run through the program on the CPU, as the executor
++ * would hand it to draw(); 0 when it cannot. */
++int nv2a_backend_fetch_attr(uint32_t attr, uint32_t index, float out[4]);
++int nv2a_backend_transform(uint32_t index, Nv2aVertex *v, Nv2aVertexExt *e);
++
+ /* Register (or, with NULL, remove) the back end. Call before the title starts
+  * submitting work; the executor must also be enabled (RECOMP_PB_EXEC). */
+ void nv2a_backend_register(const Nv2aBackend *backend);
 diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
-index a5ea9cc..7c316cc 100644
+index a5ea9cc..fcef793 100644
 --- a/src/kernel/nv2a_pb_exec.c
 +++ b/src/kernel/nv2a_pb_exec.c
 @@ -839,6 +839,17 @@ static void current_render_state(Nv2aRenderState *r)
@@ -231,7 +273,64 @@ index a5ea9cc..7c316cc 100644
          }
          return;
      }
-@@ -3321,15 +3373,89 @@ static void xf_set_viewport(void)
+@@ -3276,14 +3328,34 @@ static int batch_uses_program(void)
+     return (s_gpu.xf_mode & 3) == 2 && !no_vsh;
+ }
+ 
++/* The program's inputs for one vertex, and what is done to its outputs; split
++ * out of transform_vertex so that xf_transform_slots can run the program on
++ * four vertices at once between the two (Gamebreaker patch). */
++static void xf_program_inputs(uint32_t index, float in[NV2A_VSH_INPUTS][4], uint32_t used);
++static void xf_program_outputs(Nv2aVshOutput *out);
++
+ static int transform_vertex(uint32_t index, Nv2aVshOutput *out)
+ {
+     float in[NV2A_VSH_INPUTS][4];
+-    uint32_t a;
+ 
+     if (!batch_uses_program())
+         return ffp_vertex(index, out);
++    xf_program_inputs(index, in, ~0u);
++    if (!nv2a_vsh_run((const float (*)[4])in, out))
++        return 0;
++    xf_program_outputs(out);
++    return 1;
++}
++
++/* used: bit a set for each input the program reads; the others are left as
++ * they are (the program never looks at them). */
++static void xf_program_inputs(uint32_t index, float in[NV2A_VSH_INPUTS][4], uint32_t used)
++{
++    uint32_t a;
++
+     for (a = 0; a < NV2A_VSH_INPUTS; a++) {
++        if (!(used >> a & 1))
++            continue;
+         /* An attribute with no array (size 0) reads its current value, the
+          * one the SET_VERTEX_DATA* methods left -- as the hardware does --
+          * not a fixed 0,0,0,1. SSX 3's sprite program passes its 4x4
+@@ -3296,8 +3368,10 @@ static int transform_vertex(uint32_t index, Nv2aVshOutput *out)
+         else
+             fetch_attr(&s_gpu.attr[a], index, in[a]);   /* absent: 0,0,0,1 */
+     }
+-    if (!nv2a_vsh_run((const float (*)[4])in, out))
+-        return 0;
++}
++
++static void xf_program_outputs(Nv2aVshOutput *out)
++{
+     /* oPos.w == 0 comes from a program that never divided by w: x, y and z
+      * are already surface units. The hardware draws such a vertex (xemu
+      * clamps w away from zero, in front of the eye), but raster_xf_clipped
+@@ -3309,7 +3383,6 @@ static int transform_vertex(uint32_t index, Nv2aVshOutput *out)
+      * (anti-aliasing). */
+     out->pos[0] *= s_gpu.aa_sx;
+     out->pos[1] *= s_gpu.aa_sy;
+-    return 1;
+ }
+ 
+ static void xf_set_viewport(void)
+@@ -3321,15 +3394,250 @@ static void xf_set_viewport(void)
      s_xf_o[2] = of[2];
  }
  
@@ -276,15 +375,169 @@ index a5ea9cc..7c316cc 100644
 +    return s_xfc_mode;
 +}
 +
++/* Four vertices at once (Gamebreaker patch). A program batch is transformed in
++ * three passes: the loop below lists the slots that need a transform (the
++ * first of each index, with the repeat-vertex cache) and the repeats with the
++ * slot of their first; xf_transform_slots runs the program on the listed
++ * slots four at a time (nv2a_vsh_run4); then each repeat takes its copy. A
++ * transform depends only on its index within the call (see above), so the
++ * order of the passes changes no result. */
++static uint32_t *s_xf_todo;                   /* slots to transform, in order */
++static uint32_t (*s_xf_rep)[2];               /* repeat slot, slot of its first */
++
++/* RECOMP_VSH_TIME=1: the time program batches spend transforming (inputs,
++ * program, outputs, repeats), reported with the [XF-CACHE] line. Off, it
++ * costs one test a batch. */
++static int s_xft_on = -1;
++static uint64_t s_xft_ns, s_xft_verts, s_xft_ins;
++static uint32_t s_xft_flips;
++
++static int xf_transform_slots(uint32_t count)
++{
++    float in[4][NV2A_VSH_INPUTS][4];
++    Nv2aVshOutput out[4];
++    uint32_t t, l, used;
++
++    if (!batch_uses_program() || !nv2a_vsh_simd_mode()) {
++        for (t = 0; t < count; t++)
++            if (!transform_vertex(s_gpu.idx[s_xf_todo[t]], &s_xf[s_xf_todo[t]]))
++                return 0;                              /* no program loaded */
++        return 1;
++    }
++    used = nv2a_vsh_inputs_read();
++    memset(in, 0, sizeof in);
++    for (t = 0; t < count; t += 4) {
++        uint32_t g = count - t < 4 ? count - t : 4;
++        for (l = 0; l < g; l++)
++            xf_program_inputs(s_gpu.idx[s_xf_todo[t + l]], in[l], used);
++        if (!nv2a_vsh_run4((const float (*)[NV2A_VSH_INPUTS][4])in, g, out))
++            return 0;                                  /* no program loaded */
++        for (l = 0; l < g; l++) {
++            Nv2aVshOutput *o = &s_xf[s_xf_todo[t + l]];
++            *o = out[l];
++            xf_program_outputs(o);
++        }
++    }
++    return 1;
++}
++
++/* A back end that runs vertex programs itself (Nv2aBackend.draw_program,
++ * Gamebreaker patch) is offered each program batch here, before anything is
++ * transformed. Not offered: a program that may write c[] (a vertex could
++ * change what the next one reads), and points and lines. When the back end
++ * returns 0 the batch is transformed and drawn below exactly as without the
++ * offer. */
++int nv2a_backend_fetch_attr(uint32_t attr, uint32_t index, float out[4])
++{
++    if (attr >= NV_VERTEX_ATTRS) {
++        out[0] = out[1] = out[2] = 0.0f;
++        out[3] = 1.0f;
++        return 0;
++    }
++    if (!s_gpu.attr[attr].size) {             /* no array: the current value */
++        memcpy(out, s_gpu.imm_attr[attr], 4 * sizeof(float));
++        return 1;
++    }
++    return fetch_attr(&s_gpu.attr[attr], index, out);
++}
++
++int nv2a_backend_transform(uint32_t index, Nv2aVertex *v, Nv2aVertexExt *e)
++{
++    Nv2aVshOutput o;
++
++    if (!transform_vertex(index, &o))
++        return 0;
++    backend_from_xf(&o, v, e);
++    return 1;
++}
++
++/* The pixel state of the batch being offered: as backend_flush fills it,
++ * without vertices. */
++static void backend_offer_ext(Nv2aBatchExt *ext)
++{
++    int i;
++
++    memset(ext, 0, sizeof *ext);
++    for (i = 0; i < 4; i++) {
++        backend_texture(&s_gpu.texs[i], &ext->stage[i]);
++        if (s_gpu.texs[i].valid)
++            ext->stage_valid |= 1u << i;
++        if (tex_size_from_format(s_gpu.texs[i].color))
++            ext->stage_normalized |= 1u << i;
++    }
++    ext->combiner = s_gpu.rc_seen ? &s_gpu.rc : NULL;
++    ext->fog_color = s_gpu.fog_color;
++    ext->clip_plane_mode = s_gpu.clip_plane_mode;
++}
++
++static int backend_offer_program(void)
++{
++    Nv2aProgramBatch pb;
++    Nv2aSurface surf;
++    Nv2aRenderState rs;
++    Nv2aBatchExt ext;
++    uint32_t a;
++
++    if (!s_backend || !s_backend->draw_program || !batch_uses_program()
++        || nv2a_vsh_cxt_write() || s_gpu.prim < NV_PRIM_TRIANGLES
++        || s_gpu.prim > NV_PRIM_POLYGON)
++        return 0;
++    memset(&pb, 0, sizeof pb);
++    pb.prim = s_gpu.prim;
++    pb.indices = s_gpu.idx;
++    pb.count = s_gpu.idx_count;
++    for (a = 0; a < NV_VERTEX_ATTRS; a++)
++        if (s_gpu.attr[a].size)
++            pb.arrays |= 1u << a;
++    pb.current = (const float (*)[4])s_gpu.imm_attr;
++    pb.program = nv2a_vsh_program(&pb.start_slot, &pb.program_revision);
++    pb.constants = (const float (*)[4])nv2a_vsh_constant(0);
++    pb.aa_sx = s_gpu.aa_sx;
++    pb.aa_sy = s_gpu.aa_sy;
++    pb.fog_enable = s_gpu.fog_enable;
++    pb.fog_mode = s_gpu.fog_mode;
++    pb.fog_param[0] = s_gpu.fog_param[0];
++    pb.fog_param[1] = s_gpu.fog_param[1];
++    current_surface(&surf);
++    current_render_state(&rs);
++    backend_offer_ext(&ext);
++    pb.state = &rs;
++    pb.ext = &ext;
++    if (!s_backend->draw_program(&surf, &pb))
++        return 0;
++    s_gpu.batches_program++;
++    s_gpu.verts_program += pb.count;
++    s_gpu.tris_drawn += pb.count / 3;
++    if (s_gpu.texs[0].valid)
++        note_texture_use();
++    note_drawn();
++    return 1;
++}
++
  static void raster_batch_program(void)
  {
-     uint32_t i, n = s_gpu.idx_count;
+-    uint32_t i, n = s_gpu.idx_count;
++    uint32_t i, n = s_gpu.idx_count, todo = 0, reps = 0;
 +    int cache = xf_cache_mode() && !(batch_uses_program() && nv2a_vsh_cxt_write());
++    uint64_t t0 = 0;
++
++    if (backend_offer_program())
++        return;
++
++    if (s_xft_on < 0)
++        s_xft_on = getenv("RECOMP_VSH_TIME") != NULL;
++    if (s_xft_on && batch_uses_program())
++        t0 = xbox_HostNowNs();
  
      if (!s_xf && !(s_xf = (Nv2aVshOutput *)calloc(NV_MAX_INDICES, sizeof *s_xf)))
          return;
 -    for (i = 0; i < n; i++)
 -        if (!transform_vertex(s_gpu.idx[i], &s_xf[i]))
+-            return;                                    /* no program loaded */
++    if (!s_xf_todo && !(s_xf_todo = (uint32_t *)calloc(NV_MAX_INDICES, sizeof *s_xf_todo)))
++        return;
++    if (!s_xf_rep && !(s_xf_rep = (uint32_t (*)[2])calloc(NV_MAX_INDICES, sizeof *s_xf_rep)))
++        return;
 +    if (cache && ++s_xfc_batch == 0) {        /* serial wrapped: forget all tags */
 +        memset(s_xfc, 0, sizeof s_xfc);
 +        s_xfc_batch = 1;
@@ -295,35 +548,44 @@ index a5ea9cc..7c316cc 100644
 +        if (cache) {
 +            uint32_t h = ix & (XF_CACHE_SIZE - 1u);
 +            if (s_xfc[h].batch == s_xfc_batch && s_xfc[h].index == ix) {
-+                const Nv2aVshOutput *first = &s_xf[s_xfc[h].slot];
 +                s_xfc_hits++;
-+                if (s_xfc_mode != 2) {
-+                    s_xf[i] = *first;
-+                    continue;
-+                }
-+                if (!transform_vertex(ix, &s_xf[i]))
-+                    return;
-+                s_xfc_checked++;
-+                if (memcmp(first, &s_xf[i], sizeof *first) != 0 && s_xfc_diff++ < 16)
-+                    fprintf(stderr, "[XF-CACHE] repeat of index %u differs: pos %g %g %g %g vs %g %g %g %g\n",
-+                            ix, first->pos[0], first->pos[1], first->pos[2], first->pos[3],
-+                            s_xf[i].pos[0], s_xf[i].pos[1], s_xf[i].pos[2], s_xf[i].pos[3]);
++                s_xf_rep[reps][0] = i;
++                s_xf_rep[reps][1] = s_xfc[h].slot;
++                reps++;
++                if (s_xfc_mode == 2)
++                    s_xf_todo[todo++] = i;            /* transformed again, compared */
 +                continue;
 +            }
-+            if (!transform_vertex(ix, &s_xf[i]))
-+                return;                                /* no program loaded */
 +            s_xfc[h].batch = s_xfc_batch;
 +            s_xfc[h].index = ix;
 +            s_xfc[h].slot = i;
++        }
++        s_xf_todo[todo++] = i;
++    }
++    if (!xf_transform_slots(todo))
++        return;                                        /* no program loaded */
++    for (i = 0; i < reps; i++) {
++        const Nv2aVshOutput *first = &s_xf[s_xf_rep[i][1]];
++        Nv2aVshOutput *rep = &s_xf[s_xf_rep[i][0]];
++        if (s_xfc_mode != 2) {
++            *rep = *first;
 +            continue;
 +        }
-+        if (!transform_vertex(ix, &s_xf[i]))
-             return;                                    /* no program loaded */
++        s_xfc_checked++;
++        if (memcmp(first, rep, sizeof *first) != 0 && s_xfc_diff++ < 16)
++            fprintf(stderr, "[XF-CACHE] repeat of index %u differs: pos %g %g %g %g vs %g %g %g %g\n",
++                    s_gpu.idx[s_xf_rep[i][0]], first->pos[0], first->pos[1], first->pos[2],
++                    first->pos[3], rep->pos[0], rep->pos[1], rep->pos[2], rep->pos[3]);
++    }
++    if (t0) {
++        s_xft_ns += xbox_HostNowNs() - t0;
++        s_xft_verts += todo;
++        s_xft_ins += (uint64_t)todo * nv2a_vsh_program_length();
 +    }
      xf_set_viewport();
      {
          const VertexAttr *tc = texcoord_attr();
-@@ -4342,6 +4468,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+@@ -4342,6 +4650,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
      case 0x17F8: s_gpu.clip_plane_mode = param; break;
  
      /* Alpha test and fog. */
@@ -332,7 +594,7 @@ index a5ea9cc..7c316cc 100644
      case 0x0300: s_gpu.alpha_test = param; break;
      case 0x033C: s_gpu.alpha_func = param; break;
      case 0x0340: s_gpu.alpha_ref = param; break;
-@@ -4886,6 +5014,16 @@ void nv2a_pb_exec_report(void)
+@@ -4886,6 +5196,34 @@ void nv2a_pb_exec_report(void)
          last_ms = now;
      }
      flip_hold_report();
@@ -346,33 +608,533 @@ index a5ea9cc..7c316cc 100644
 +        fprintf(stderr, "\n");
 +        s_xfc_idx = s_xfc_hits = 0;
 +    }
++    if (s_xft_on > 0 && s_xft_verts && s_gpu.flips != s_xft_flips) {
++        uint32_t fl = s_gpu.flips - s_xft_flips;
++        fprintf(stderr, "[VSH-TIME] %s: %.3f ms a frame transforming program batches,"
++                " %.1f ns a vertex, %.2f ns an instruction (%llu vertices, %u frames)\n",
++                nv2a_vsh_simd_mode() ? "four at a time" : "one at a time",
++                (double)s_xft_ns / 1e6 / fl, (double)s_xft_ns / (double)s_xft_verts,
++                s_xft_ins ? (double)s_xft_ns / (double)s_xft_ins : 0.0,
++                (unsigned long long)s_xft_verts, fl);
++        s_xft_ns = s_xft_verts = s_xft_ins = 0;
++        s_xft_flips = s_gpu.flips;
++    }
++    if (nv2a_vsh_simd_mode() == 2) {
++        unsigned long long checked, differ, nan_bits, nan_out;
++        nv2a_vsh_simd_stats(&checked, &differ, &nan_bits, &nan_out);
++        fprintf(stderr, "[VSH-SIMD] %llu vertices checked against one at a time, %llu differ,"
++                " %llu differ only in the bits of a NaN, %llu with a NaN in an output\n",
++                checked, differ, nan_bits, nan_out);
++    }
      fprintf(stderr, "[GPU] surface 0x%08X pitch %u clip %ux%u+%u+%u"
                      " clears %u | %u unhandled methods (%d distinct)\n",
              s_gpu.color_offset, s_gpu.pitch, s_gpu.clip_w, s_gpu.clip_h,
 diff --git a/src/kernel/nv2a_vsh_interp.c b/src/kernel/nv2a_vsh_interp.c
-index c7fd25d..787c904 100644
+index c7fd25d..24255a2 100644
 --- a/src/kernel/nv2a_vsh_interp.c
 +++ b/src/kernel/nv2a_vsh_interp.c
-@@ -84,6 +84,7 @@ void nv2a_vsh_set_start_slot(uint32_t slot)
+@@ -84,6 +84,13 @@ void nv2a_vsh_set_start_slot(uint32_t slot)
      }
  }
  void nv2a_vsh_set_cxt_write(uint32_t enable) { s_cxt_write = enable; }
 +uint32_t nv2a_vsh_cxt_write(void) { return s_cxt_write; }
++const uint32_t (*nv2a_vsh_program(uint32_t *start_slot, uint32_t *revision))[4]
++{
++    *start_slot = s_start_slot;
++    *revision = s_program_revision;
++    return (const uint32_t (*)[4])s_program;
++}
  
  void nv2a_vsh_set_constant_load(uint32_t index)
  {
+@@ -585,6 +592,448 @@ static int vsh_run_decoded(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *ou
+     return 0;
+ }
+ 
++/* ---- four vertices at once (Gamebreaker patch) ---------------------------- *
++ *
++ * vsh_run_decoded pays the op switch and the source plumbing once per
++ * instruction per vertex. nv2a_vsh_run4 runs the same decoded program on four
++ * vertices together: every register is held as four SSE2 vectors, one per
++ * component, each holding that component of the four vertices ("structure of
++ * arrays"). A swizzle is then only a choice of which vector to take, and each
++ * arithmetic step is one instruction for all four.
++ *
++ * The results are bit for bit those of vsh_run_decoded, because every step
++ * is the same IEEE single-precision operation in the same order:
++ *  - add, multiply, divide and square root are the scalar SSE operations
++ *    applied lane by lane (addps/mulps/divps/sqrtps round exactly as
++ *    addss/mulss/divss/sqrtss); no fused multiply-add, and never the
++ *    approximate rcpps/rsqrtps;
++ *  - the dot products add their products in the scalar code's order,
++ *    ((x + y) + z) + w;
++ *  - MIN, MAX, SLT and SGE are compare-and-select with the scalar code's
++ *    exact conditions (a < b, a >= b), so NaNs and signed zeros pick the same
++ *    operand; RCP, RCC and RSQ keep their special cases (RCP of -0 is +inf);
++ *  - ARL rounds each lane with the scalar floorf, so every vertex keeps its
++ *    own a0 and an a0-relative constant read fetches each lane's own row;
++ *  - EXP, LOG and LIT (rare) run the scalar run_ilu on each lane.
++ * A program that may write c[] (_CXT_WRITE_EN) would let one vertex see the
++ * constants another wrote; it runs one vertex at a time, in order, as before.
++ *
++ * RECOMP_VSH_SIMD=0 transforms one vertex at a time as before;
++ * RECOMP_VSH_SIMD=check runs both on every vertex and counts the vertices
++ * whose outputs differ (they then take the one-at-a-time result); a vertex
++ * that differs only in the bits of a NaN is counted apart (out_compare).
++ * RECOMP_VSH_DUMP, RECOMP_VSH_DECODED=0 and RECOMP_VSH_CHECK=1 keep the
++ * one-at-a-time path they were written for. */
++#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
++#define VSH_SIMD 1
++#include <emmintrin.h>
++#else
++#define VSH_SIMD 0
++#endif
++
++static int s_simd_mode = -1;                 /* 0 off, 1 on, 2 on and checked */
++static unsigned long long s_simd_checked, s_simd_diff, s_simd_nan, s_simd_nanout;
++
++int nv2a_vsh_simd_mode(void)
++{
++    if (s_simd_mode < 0) {
++        const char *e = getenv("RECOMP_VSH_SIMD");
++        const char *d = getenv("RECOMP_VSH_DECODED");
++        const char *c = getenv("RECOMP_VSH_CHECK");
++        s_simd_mode = !e ? 1 : e[0] == '0' ? 0 : strcmp(e, "check") == 0 ? 2 : 1;
++        if (!VSH_SIMD || getenv("RECOMP_VSH_DUMP") || (d && d[0] == '0') || (c && c[0] == '1'))
++            s_simd_mode = 0;
++        fprintf(stderr, "[VSH-SIMD] four vertices at once %s\n",
++                s_simd_mode == 0 ? "off" : s_simd_mode == 2 ? "on, every vertex checked" : "on");
++    }
++    return s_simd_mode;
++}
++
++#if VSH_SIMD
++static uint32_t q_used_inputs(void);
++#endif
++
++uint32_t nv2a_vsh_inputs_read(void)
++{
++#if VSH_SIMD
++    if (!s_dec_valid || s_dec_rev != s_program_revision)
++        dec_program();
++    return q_used_inputs();
++#else
++    return (1u << NV2A_VSH_INPUTS) - 1u;
++#endif
++}
++
++uint32_t nv2a_vsh_program_length(void)
++{
++    if (!s_dec_valid || s_dec_rev != s_program_revision)
++        dec_program();
++    return s_dec_count;
++}
++
++void nv2a_vsh_simd_stats(unsigned long long *checked, unsigned long long *differ,
++                         unsigned long long *nan_bits, unsigned long long *nan_out)
++{
++    *checked = s_simd_checked;
++    *differ = s_simd_diff;
++    *nan_bits = s_simd_nan;
++    *nan_out = s_simd_nanout;
++}
++
++/* 0 the same, 1 different only where both hold a NaN, 2 different. When both
++ * operands of an add or multiply are NaNs, x86 returns the first one's, and a
++ * compiler may swap the operands of either code: such a vertex can differ in
++ * the sign or payload of a NaN and in nothing else, which no comparison,
++ * clamp or clip downstream can tell apart. */
++static int out_compare(const Nv2aVshOutput *a, const Nv2aVshOutput *b)
++{
++    const float *fa = (const float *)a, *fb = (const float *)b;
++    size_t f;
++    int r = 0;
++
++    for (f = 0; f < sizeof *a / sizeof(float); f++)
++        if (memcmp(&fa[f], &fb[f], sizeof(float)) != 0) {
++            if (!(isnan(fa[f]) && isnan(fb[f])))
++                return 2;
++            r = 1;
++        }
++    return r;
++}
++
++#if VSH_SIMD
++typedef struct { __m128 c[4]; } vq;          /* component k of four vertices */
++
++static inline __m128 q_sel(__m128 m, __m128 a, __m128 b)
++{
++    return _mm_or_ps(_mm_and_ps(m, a), _mm_andnot_ps(m, b));
++}
++
++static inline void q_read(const DecSrc *d, const vq *inq, const vq *regs,
++                          const int a0[4], vq *r)
++{
++    int k;
++
++    if (d->mux == DEC_TEMP || d->mux == DEC_INPUT) {
++        const vq *s = d->mux == DEC_TEMP ? &regs[d->idx] : &inq[d->idx];
++        for (k = 0; k < 4; k++)
++            r->c[k] = s->c[d->sw[k]];
++    } else if (d->cptr) {
++        for (k = 0; k < 4; k++)
++            r->c[k] = _mm_set1_ps(d->cptr[d->sw[k]]);
++    } else {
++        const float *row[4];
++        int l;
++        for (l = 0; l < 4; l++) {
++            int ci = (int)d->c + a0[l];
++            if (ci < 0 || ci >= NV2A_VSH_CONSTANTS)
++                ci = 0;
++            row[l] = s_const[ci];
++        }
++        for (k = 0; k < 4; k++)
++            r->c[k] = _mm_setr_ps(row[0][d->sw[k]], row[1][d->sw[k]],
++                                  row[2][d->sw[k]], row[3][d->sw[k]]);
++    }
++    if (d->neg) {
++        const __m128 sign = _mm_castsi128_ps(_mm_set1_epi32((int)0x80000000u));
++        for (k = 0; k < 4; k++)
++            r->c[k] = _mm_xor_ps(r->c[k], sign);
++    }
++}
++
++static inline void q_write(vq *dst, const vq *src, uint32_t mask)
++{
++    if (mask & 8) dst->c[0] = src->c[0];
++    if (mask & 4) dst->c[1] = src->c[1];
++    if (mask & 2) dst->c[2] = src->c[2];
++    if (mask & 1) dst->c[3] = src->c[3];
++}
++
++static inline void q_splat(vq *r, __m128 v)
++{
++    r->c[0] = r->c[1] = r->c[2] = r->c[3] = v;
++}
++
++static inline void q_mac(uint32_t op, const vq *a, const vq *b, const vq *c,
++                         vq *r, int a0[4])
++{
++    const __m128 one = _mm_set1_ps(1.0f);
++    int k;
++
++    switch (op) {
++    case 2:
++        for (k = 0; k < 4; k++) r->c[k] = _mm_mul_ps(a->c[k], b->c[k]);
++        break;
++    case 3:
++        for (k = 0; k < 4; k++) r->c[k] = _mm_add_ps(a->c[k], c->c[k]);
++        break;
++    case 4:
++        for (k = 0; k < 4; k++)
++            r->c[k] = _mm_add_ps(_mm_mul_ps(a->c[k], b->c[k]), c->c[k]);
++        break;
++    case 5: case 6: case 7: {
++        __m128 t = _mm_add_ps(_mm_add_ps(_mm_mul_ps(a->c[0], b->c[0]),
++                                         _mm_mul_ps(a->c[1], b->c[1])),
++                              _mm_mul_ps(a->c[2], b->c[2]));
++        if (op == 6)
++            t = _mm_add_ps(t, b->c[3]);                          /* dph */
++        else if (op == 7)
++            t = _mm_add_ps(t, _mm_mul_ps(a->c[3], b->c[3]));     /* dp4 */
++        q_splat(r, t);
++        break;
++    }
++    case 8:                                                      /* dst */
++        r->c[0] = one;
++        r->c[1] = _mm_mul_ps(a->c[1], b->c[1]);
++        r->c[2] = a->c[2];
++        r->c[3] = b->c[3];
++        break;
++    case 9:                                                      /* min */
++        for (k = 0; k < 4; k++)
++            r->c[k] = q_sel(_mm_cmplt_ps(a->c[k], b->c[k]), a->c[k], b->c[k]);
++        break;
++    case 10:                                                     /* max */
++        for (k = 0; k < 4; k++)
++            r->c[k] = q_sel(_mm_cmpge_ps(a->c[k], b->c[k]), a->c[k], b->c[k]);
++        break;
++    case 11:                                                     /* slt */
++        for (k = 0; k < 4; k++)
++            r->c[k] = _mm_and_ps(_mm_cmplt_ps(a->c[k], b->c[k]), one);
++        break;
++    case 12:                                                     /* sge */
++        for (k = 0; k < 4; k++)
++            r->c[k] = _mm_and_ps(_mm_cmpge_ps(a->c[k], b->c[k]), one);
++        break;
++    case 13: {                                                   /* arl */
++        float t[4];
++        int l;
++        _mm_storeu_ps(t, _mm_add_ps(a->c[0], _mm_set1_ps(0.001f)));
++        for (l = 0; l < 4; l++)
++            a0[l] = (int)floorf(t[l]);
++        *r = *a;
++        break;
++    }
++    default:                                                     /* mov, 14, 15 */
++        *r = *a;
++        break;
++    }
++}
++
++static void q_ilu(uint32_t op, const vq *c, vq *r)
++{
++    const __m128 one = _mm_set1_ps(1.0f), zero = _mm_setzero_ps();
++    const __m128 absm = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
++    __m128 x = c->c[0];
++
++    switch (op) {
++    case 1:                                                      /* mov */
++        *r = *c;
++        break;
++    case 2:                                                      /* rcp */
++        q_splat(r, q_sel(_mm_cmpeq_ps(x, zero), _mm_set1_ps(INFINITY),
++                         _mm_div_ps(one, x)));
++        break;
++    case 3: {                                                    /* rcc */
++        __m128 f = _mm_div_ps(one, x), neg;
++        neg = _mm_cmplt_ps(f, zero);
++        f = q_sel(_mm_cmplt_ps(_mm_and_ps(f, absm), _mm_set1_ps(5.42101e-20f)),
++                  q_sel(neg, _mm_set1_ps(-5.42101e-20f), _mm_set1_ps(5.42101e-20f)), f);
++        neg = _mm_cmplt_ps(f, zero);
++        f = q_sel(_mm_cmpgt_ps(_mm_and_ps(f, absm), _mm_set1_ps(1.884467e19f)),
++                  q_sel(neg, _mm_set1_ps(-1.884467e19f), _mm_set1_ps(1.884467e19f)), f);
++        q_splat(r, f);
++        break;
++    }
++    case 4:                                                      /* rsq */
++        q_splat(r, _mm_div_ps(one, _mm_sqrt_ps(_mm_and_ps(x, absm))));
++        break;
++    default: {                                     /* exp, log, lit: per lane */
++        float in[4][4], o[4][4];
++        int k, l;
++        for (k = 0; k < 4; k++)
++            _mm_storeu_ps(in[k], c->c[k]);
++        for (l = 0; l < 4; l++) {
++            vec4 v, w;
++            for (k = 0; k < 4; k++)
++                v.v[k] = in[k][l];
++            w = run_ilu(op, v);
++            for (k = 0; k < 4; k++)
++                o[k][l] = w.v[k];
++        }
++        for (k = 0; k < 4; k++)
++            r->c[k] = _mm_loadu_ps(o[k]);
++        break;
++    }
++    }
++}
++
++/* Four (x, y, z, w) rows of four vertices to four component vectors, and back. */
++static inline void q_from_rows(vq *q, const float *r0, const float *r1,
++                               const float *r2, const float *r3)
++{
++    __m128 a = _mm_loadu_ps(r0), b = _mm_loadu_ps(r1);
++    __m128 c = _mm_loadu_ps(r2), d = _mm_loadu_ps(r3);
++    _MM_TRANSPOSE4_PS(a, b, c, d);
++    q->c[0] = a; q->c[1] = b; q->c[2] = c; q->c[3] = d;
++}
++
++static inline void q_to_rows(const vq *q, float *r0, float *r1, float *r2, float *r3)
++{
++    __m128 a = q->c[0], b = q->c[1], c = q->c[2], d = q->c[3];
++    _MM_TRANSPOSE4_PS(a, b, c, d);
++    _mm_storeu_ps(r0, a); _mm_storeu_ps(r1, b);
++    _mm_storeu_ps(r2, c); _mm_storeu_ps(r3, d);
++}
++
++/* vsh_finish's colour clamp: c > 1 ? 1 : (c >= 0 ? c : 0). */
++static inline void q_clamp01(vq *q)
++{
++    const __m128 one = _mm_set1_ps(1.0f), zero = _mm_setzero_ps();
++    int k;
++    for (k = 0; k < 4; k++)
++        q->c[k] = q_sel(_mm_cmpgt_ps(q->c[k], one), one,
++                        q_sel(_mm_cmpge_ps(q->c[k], zero), q->c[k], zero));
++}
++
++/* The inputs the decoded program reads (bit k: v[k]), kept with the decode
++ * revision. */
++static uint32_t s_q_used, s_q_used_rev;
++static int      s_q_used_valid;
++
++static uint32_t q_used_inputs(void)
++{
++    if (!s_q_used_valid || s_q_used_rev != s_dec_rev) {
++        uint32_t used = 0, i;
++        int k;
++        for (i = 0; i < s_dec_count; i++)
++            for (k = 0; k < 3; k++)
++                if ((s_dec[i].reads >> k & 1) && s_dec[i].src[k].mux == DEC_INPUT)
++                    used |= 1u << s_dec[i].src[k].idx;
++        s_q_used = used;
++        s_q_used_rev = s_dec_rev;
++        s_q_used_valid = 1;
++    }
++    return s_q_used;
++}
++
++static int vsh_run4_simd(const float (*const in[4])[4], Nv2aVshOutput *const out[4])
++{
++    vq inq[NV2A_VSH_INPUTS];
++    vq regs[13];                                  /* R0..R11, then oPos */
++    vq outq[13];
++    int a0[4] = {0, 0, 0, 0};
++    uint32_t i;
++    int k, l;
++
++    if (s_dec_count == 0 || !s_dec[s_dec_count - 1].final)
++        return 0;                                 /* no FINAL: as vsh_run_decoded */
++    q_used_inputs();
++    for (k = 0; k < NV2A_VSH_INPUTS; k++)
++        if (s_q_used >> k & 1)
++            q_from_rows(&inq[k], in[0][k], in[1][k], in[2][k], in[3][k]);
++
++    memset(regs, 0, sizeof regs);
++    memset(outq, 0, sizeof outq);
++    {
++        const __m128 one = _mm_set1_ps(1.0f);
++        outq[3].c[3] = outq[4].c[3] = one;        /* colours default opaque */
++        outq[9].c[3] = outq[10].c[3] = outq[11].c[3] = outq[12].c[3] = one;
++    }
++
++    for (i = 0; i < s_dec_count; i++) {
++        const DecIns *d = &s_dec[i];
++        vq a, b, c, mres, ires;
++
++        memset(&a, 0, sizeof a);
++        b = a; c = a; mres = a; ires = a;
++        if (d->reads & 1) q_read(&d->src[0], inq, regs, a0, &a);
++        if (d->reads & 2) q_read(&d->src[1], inq, regs, a0, &b);
++        if (d->reads & 4) q_read(&d->src[2], inq, regs, a0, &c);
++        if (d->mac)
++            q_mac(d->mac, &a, &b, &c, &mres, a0);
++        if (d->ilu)
++            q_ilu(d->ilu, &c, &ires);
++        if (d->mac_mask && d->mac_dst != DEC_NO_DST)
++            q_write(&regs[d->mac_dst], &mres, d->mac_mask);
++        if (d->ilu_mask && d->ilu_dst != DEC_NO_DST)
++            q_write(&regs[d->ilu_dst], &ires, d->ilu_mask);
++        if (d->omask && d->to_o) {                /* c[] writes never get here */
++            const vq *src = d->from_ilu ? &ires : &mres;
++            if (d->oaddr == 0)
++                q_write(&regs[12], src, d->omask);
++            else if (d->oaddr < 13)
++                q_write(&outq[d->oaddr], src, d->omask);
++        }
++    }
++
++    q_clamp01(&outq[3]);
++    q_clamp01(&outq[4]);
++    q_to_rows(&regs[12], out[0]->pos, out[1]->pos, out[2]->pos, out[3]->pos);
++    q_to_rows(&outq[3], out[0]->d0, out[1]->d0, out[2]->d0, out[3]->d0);
++    q_to_rows(&outq[4], out[0]->d1, out[1]->d1, out[2]->d1, out[3]->d1);
++    q_to_rows(&outq[5], out[0]->fog, out[1]->fog, out[2]->fog, out[3]->fog);
++    for (l = 0; l < 4; l++)
++        q_to_rows(&outq[9 + l], out[0]->tex[l], out[1]->tex[l],
++                  out[2]->tex[l], out[3]->tex[l]);
++    return 1;
++}
++#endif /* VSH_SIMD */
++
++int nv2a_vsh_run4(const float in[][NV2A_VSH_INPUTS][4], uint32_t n,
++                  Nv2aVshOutput *out)
++{
++    uint32_t v;
++#if VSH_SIMD
++    const float (*lin[4])[4];
++    Nv2aVshOutput spare[4], *lout[4];
++    int r;
++
++    if (n > 4)
++        return 0;
++    if (n && nv2a_vsh_simd_mode() != 0 && !s_cxt_write) {
++        if (!s_dec_valid || s_dec_rev != s_program_revision)
++            dec_program();
++        for (v = 0; v < 4; v++) {
++            lin[v] = in[v < n ? v : 0];           /* a short group repeats vertex 0 */
++            lout[v] = v < n ? &out[v] : &spare[v];
++        }
++        r = vsh_run4_simd(lin, lout);
++        if (s_simd_mode == 2) {
++            for (v = 0; v < n; v++) {
++                Nv2aVshOutput ref;
++                int r1 = vsh_run_decoded(in[v], &ref);
++                int c = r1 != r ? 2 : r1 ? out_compare(&ref, &out[v]) : 0;
++                s_simd_checked++;
++                if (r1) {
++                    const float *f = (const float *)&ref;
++                    size_t q;
++                    for (q = 0; q < sizeof ref / sizeof(float); q++)
++                        if (isnan(f[q])) {
++                            s_simd_nanout++;              /* a NaN reached an output */
++                            break;
++                        }
++                }
++                if (c == 1)
++                    s_simd_nan++;
++                if (c) {
++                    if (c == 2 && s_simd_diff++ < 16)
++                        fprintf(stderr, "[VSH-SIMD] vertex differs (one at a time %d,"
++                                " four %d): pos %.9g %.9g %.9g %.9g vs %.9g %.9g %.9g %.9g\n",
++                                r1, r, ref.pos[0], ref.pos[1], ref.pos[2], ref.pos[3],
++                                out[v].pos[0], out[v].pos[1], out[v].pos[2], out[v].pos[3]);
++                    out[v] = ref;
++                    r = r1;
++                }
++            }
++        }
++        return r;
++    }
++#endif
++    for (v = 0; v < n; v++)
++        if (!nv2a_vsh_run(in[v], &out[v]))
++            return 0;
++    return 1;
++}
++
+ static int vsh_run_fields(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out);
+ 
+ int nv2a_vsh_run(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out)
 diff --git a/src/kernel/nv2a_vsh_interp.h b/src/kernel/nv2a_vsh_interp.h
-index 8acb0af..35004bb 100644
+index 8acb0af..936c052 100644
 --- a/src/kernel/nv2a_vsh_interp.h
 +++ b/src/kernel/nv2a_vsh_interp.h
-@@ -43,6 +43,7 @@ void nv2a_vsh_set_start_slot(uint32_t slot);          /* _PROGRAM_START     */
+@@ -43,6 +43,11 @@ void nv2a_vsh_set_start_slot(uint32_t slot);          /* _PROGRAM_START     */
  void nv2a_vsh_set_constant_load(uint32_t index);      /* _CONSTANT_LOAD     */
  void nv2a_vsh_constant_word(uint32_t word);           /* _CONSTANT(i)       */
  void nv2a_vsh_set_cxt_write(uint32_t enable);         /* _CXT_WRITE_EN      */
 +uint32_t nv2a_vsh_cxt_write(void);   /* may the program write c[]? */
++/* The program as loaded, for a back end that runs it itself: program memory
++ * (NV2A_VSH_SLOTS rows of four dwords), the start slot, and a number that
++ * changes whenever either does. */
++const uint32_t (*nv2a_vsh_program(uint32_t *start_slot, uint32_t *revision))[4];
  
  /* Run the program from the start slot on one vertex. Inputs are the ten
   * attribute values as floats. Returns 0 if there is no program to run (no
+@@ -50,6 +55,22 @@ void nv2a_vsh_set_cxt_write(uint32_t enable);         /* _CXT_WRITE_EN      */
+  * transform this batch" rather than drawing garbage. */
+ int  nv2a_vsh_run(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out);
+ 
++/* The same for n vertices at once, 1 to 4 (Gamebreaker patch): out[0..n-1]
++ * are bit for bit what nv2a_vsh_run gives each. Returns 0 if there is no
++ * program to run. nv2a_vsh_simd_mode: 0 when RECOMP_VSH_SIMD=0 (or a
++ * diagnostic that needs one vertex at a time) asks for the old path, 1 on,
++ * 2 when RECOMP_VSH_SIMD=check compares every vertex with the old path;
++ * nv2a_vsh_simd_stats gives that check's totals (nan_bits: vertices that
++ * differ only in the sign or payload bits of a NaN; nan_out: vertices with a
++ * NaN anywhere in their outputs). */
++int  nv2a_vsh_run4(const float in[][NV2A_VSH_INPUTS][4], uint32_t n,
++                   Nv2aVshOutput *out);
++int  nv2a_vsh_simd_mode(void);
++void nv2a_vsh_simd_stats(unsigned long long *checked, unsigned long long *differ,
++                         unsigned long long *nan_bits, unsigned long long *nan_out);
++uint32_t nv2a_vsh_program_length(void);   /* instructions, start to FINAL */
++uint32_t nv2a_vsh_inputs_read(void);     /* bit k: the program reads v[k] */
++
+ /* Direct access, for the self-test. */
+ void nv2a_vsh_set_constant(uint32_t index, const float v[4]);
+ const float *nv2a_vsh_constant(uint32_t index);   /* for traces */
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
 index 7ade793..8389cb6 100644
 --- a/src/kernel/xbox_memory_layout.c
@@ -461,3 +1223,66 @@ index 7ade793..8389cb6 100644
      g_nv2a_ack_thread = CreateThread(NULL, 0, nv2a_ack_thread,
                                       g_nv2a_memory, 0, NULL);
      if (g_nv2a_ack_thread) {
+diff --git a/tools/disasm/engine.py b/tools/disasm/engine.py
+index 2063a15..9946222 100644
+--- a/tools/disasm/engine.py
++++ b/tools/disasm/engine.py
+@@ -538,7 +538,22 @@ class DisasmEngine:
+ 
+         Returns the jump target, or None if the block rets, runs long, or ends
+         in something that is not a direct jmp.
++
++        Answered once per address and kept for the engine's image: the answer
++        depends only on the image's bytes and the two arguments, and the
++        function detector asks again for the same addresses many times.
+         """
++        memo = self.__dict__.get('_tail_jump_memo')
++        if memo is None or memo[0] is not self.image:
++            memo = (self.image, {})
++            self.__dict__['_tail_jump_memo'] = memo
++        key = (addr, max_insns)
++        if key not in memo[1]:
++            memo[1][key] = self._block_tail_jump_uncached(addr, max_insns)
++        return memo[1][key]
++
++    def _block_tail_jump_uncached(self, addr: int, max_insns: int):
++        """block_tail_jump without the memo."""
+         section = self.image.get_section_at_va(addr)
+         if section is None or not section.executable:
+             return None
+diff --git a/tools/disasm/loader.py b/tools/disasm/loader.py
+index 0286641..aad4517 100644
+--- a/tools/disasm/loader.py
++++ b/tools/disasm/loader.py
+@@ -137,13 +137,31 @@ class BinaryImage:
+         Code sections get just enough of the fill to finish an instruction
+         that starts in the file bytes (an x86 instruction is at most 15
+         bytes); more would hand the sweeps zeros to decode as code.
++
++        Made once per section and kept: a disassembly asks for a section
++        about 160,000 times, and copying it every time dominated the run.
++        Only for an immutable raw_data, so a kept result can never differ
++        from a fresh one.
+         """
++        memo = None
++        if type(self.raw_data) is bytes:
++            memo = self.__dict__.get('_section_data_memo')
++            if memo is None or memo[0] is not self.raw_data:
++                memo = (self.raw_data, {})
++                self.__dict__['_section_data_memo'] = memo
++            key = (section.raw_addr, section.raw_size,
++                   section.virtual_size, section.executable)
++            kept = memo[1].get(key)
++            if kept is not None:
++                return kept
+         data = self.raw_data[section.raw_addr:section.raw_addr + section.raw_size]
+         # A BSS-only section (no file bytes) has nothing to finish.
+         if (section.executable and section.raw_size > 0
+                 and section.virtual_size > section.raw_size):
+             data += bytes(min(section.virtual_size - section.raw_size,
+                               MAX_INSN_LEN - 1))
++        if memo is not None:
++            memo[1][key] = data
+         return data
+ 
+     def get_kernel_import_at_thunk(self, thunk_addr: int) -> Optional[KernelImport]:

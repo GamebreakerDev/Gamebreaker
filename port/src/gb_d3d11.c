@@ -82,6 +82,7 @@
 #include "gb_log.h"         /* the log for bug reports */
 #include "gb_overlay.h"     /* start screen, corner mark, frame counter, screenshots */
 #include "gb_textures.h"    /* mods' pictures by texture fingerprint, and the maker's dump */
+#include "gb_vsh_gpu.h"     /* the title's vertex programs on the graphics card (GB_VSH_GPU) */
 
 int gb_game_hz(void);        /* recomp_manual.c: the game's step rate, GB_GAME_HZ (60 unless set) */
 
@@ -2676,6 +2677,95 @@ static int window_clip(const Nv2aSurface *s, const Nv2aRenderState *rs, const Gb
     return 1;
 }
 
+
+/* Textures, samplers and register-combiner constants of a batch the
+ * combiners colour: for gb_draw, and for a batch the graphics card
+ * transforms (gb_draw_program). `flat`: 1 for a batch whose every vertex has
+ * w = 1, 0 for 3D, -1 not checked. Leaves slots it does not use as they are. */
+static void combiner_state(const Nv2aBatchExt *x, const GbTarget *t, int flat,
+                           ID3D11ShaderResourceView *srv[4], ID3D11SamplerState *smp[4],
+                           float su[4], float sv[4], GbConstants *kb, uint32_t *flags, uint64_t *tex0_hash)
+{
+    const Nv2aCombiner *rc = x->combiner;
+    uint32_t lv;
+    int st;
+
+    for (st = 0; st < 4; st++) {
+        uint32_t mode = (rc->stage_program >> (st * 5)) & 0x1F;
+        const Nv2aTexture *tx = &x->stage[st];
+        /* Modes 1 to 3 sample the stage's texture (cube maps as flat). */
+        if (mode < 1 || mode > 3 || !((x->stage_valid >> st) & 1))
+            continue;
+        if ((srv[st] = texture_view(tx, t, &lv)) == NULL)
+            continue;                   /* unreadable: reads white, as on the CPU path */
+        if (st == 0)
+            *tex0_hash = G.view_hash0;
+        smp[st] = sampler_state(tx, G.view_repl ? lv | GB_LEVELS_REPL : flat || G.ab_off ? 1 : lv);
+        if (G.tex_q && !flat) {
+            if (lv > 1) G.st_tex_mip++; else G.st_tex_one3d++;
+        }
+        *flags |= 16u << st;
+        if (!((x->stage_normalized >> st) & 1)) {       /* coordinates in texels */
+            su[st] = 1.0f / (float)tx->width;
+            sv[st] = 1.0f / (float)tx->height;
+        }
+    }
+    for (st = 0; st < 8; st++) {
+        kb->cw[st][0] = rc->color_icw[st]; kb->cw[st][1] = rc->alpha_icw[st];
+        kb->cw[st][2] = rc->color_ocw[st]; kb->cw[st][3] = rc->alpha_ocw[st];
+        unpack_argb(rc->factor0[st], kb->f0[st]);
+        unpack_argb(rc->factor1[st], kb->f1[st]);
+    }
+    kb->fin[0] = rc->final0; kb->fin[1] = rc->final1;
+    kb->fin[2] = rc->control; kb->fin[3] = rc->stage_program;
+    unpack_argb(rc->final_c0, kb->fc0);
+    unpack_argb(rc->final_c1, kb->fc1);
+    kb->fogc[0] = (x->fog_color & 0xFF) / 255.0f;         /* red is in the low byte here */
+    kb->fogc[1] = ((x->fog_color >> 8) & 0xFF) / 255.0f;
+    kb->fogc[2] = ((x->fog_color >> 16) & 0xFF) / 255.0f;
+    kb->misc[3] = x->clip_plane_mode;
+    *flags |= 1;
+}
+
+/* The pixel shader with its constants, textures and samplers, the
+ * rasteriser, blending and depth: everything a draw needs after its vertices
+ * are bound. For gb_draw and gb_draw_program. */
+static void pixel_and_output_state(const Nv2aRenderState *rs, const GbConstants *kb, int flat,
+                                   ID3D11ShaderResourceView *srv[4], ID3D11SamplerState *smp[4],
+                                   int clipped, const D3D11_RECT *clip_rect, int have_depth)
+{
+    D3D11_MAPPED_SUBRESOURCE map;
+    ID3D11PixelShader *ps;
+    float bf[4];
+
+    (void)flat;
+    if (SUCCEEDED(ID3D11DeviceContext_Map(G.ctx, (ID3D11Resource *)G.cb, 0,
+                                          D3D11_MAP_WRITE_DISCARD, 0, &map))) {
+        memcpy(map.pData, kb, sizeof *kb);
+        ID3D11DeviceContext_Unmap(G.ctx, (ID3D11Resource *)G.cb, 0);
+    }
+    bf[0] = ((rs->blend_color >> 16) & 0xFF) / 255.0f;
+    bf[1] = ((rs->blend_color >> 8) & 0xFF) / 255.0f;
+    bf[2] = (rs->blend_color & 0xFF) / 255.0f;
+    bf[3] = ((rs->blend_color >> 24) & 0xFF) / 255.0f;
+    /* GB_D3D11_MSAA: a cut-out 3D batch (alpha test GREATER or GEQUAL)
+     * smooths its edges across the samples. In a match every such batch also
+     * blends; coverage and blending combine (the samples covered are blended
+     * as before), which matters where the test cuts high (reference 192: a
+     * hard edge at three quarters opacity). */
+    ps = G.ps;
+    ID3D11DeviceContext_PSSetShader(G.ctx, ps, NULL, 0);
+    ID3D11DeviceContext_PSSetConstantBuffers(G.ctx, 0, 1, &G.cb);
+    ID3D11DeviceContext_PSSetShaderResources(G.ctx, 0, 4, srv);
+    ID3D11DeviceContext_PSSetSamplers(G.ctx, 0, 4, smp);
+    ID3D11DeviceContext_RSSetState(G.ctx, clipped ? G.raster_clip : G.raster);
+    if (clipped)
+        ID3D11DeviceContext_RSSetScissorRects(G.ctx, 1, clip_rect);
+    ID3D11DeviceContext_OMSetBlendState(G.ctx, blend_state(rs), bf, 0xFFFFFFFFu);
+    ID3D11DeviceContext_OMSetDepthStencilState(G.ctx, depth_state(rs, have_depth),
+                                               rs->stencil_ref & 0xFF);
+}
+
 static void gb_draw(const Nv2aSurface *s, const Nv2aBatch *b)
 {
     const Nv2aRenderState *rs = b->state;
@@ -2692,13 +2782,12 @@ static void gb_draw(const Nv2aSurface *s, const Nv2aBatch *b)
     GbTarget *t;
     GbDepth *d = NULL;
     GbVertex *out;
-    float sx, sy, su[4], sv[4], bf[4], sq, cx;
+    float sx, sy, su[4], sv[4], sq, cx;
     uint32_t i, n = 0, bytes = b->count * (uint32_t)sizeof(GbVertex), flags = 0;
     UINT stride = sizeof(GbVertex), offset;
     int st, flat = -1;                  /* every vertex w = 1 (menus, HUD, text, movies); -1 not checked */
     uint32_t lv;
     uint64_t tex0_hash = 0;             /* level-0 hash of stage 0's texture (anchored_2d) */
-    ID3D11PixelShader *ps;
     D3D11_RECT clip_rect;
     int clipped;
 
@@ -2722,42 +2811,7 @@ static void gb_draw(const Nv2aSurface *s, const Nv2aBatch *b)
         su[st] = sv[st] = 1.0f;
     }
     if (combine) {
-        const Nv2aCombiner *rc = x->combiner;
-        for (st = 0; st < 4; st++) {
-            uint32_t mode = (rc->stage_program >> (st * 5)) & 0x1F;
-            const Nv2aTexture *tx = &x->stage[st];
-            /* Modes 1 to 3 sample the stage's texture (cube maps as flat). */
-            if (mode < 1 || mode > 3 || !((x->stage_valid >> st) & 1))
-                continue;
-            if ((srv[st] = texture_view(tx, t, &lv)) == NULL)
-                continue;                   /* unreadable: reads white, as on the CPU path */
-            if (st == 0)
-                tex0_hash = G.view_hash0;
-            smp[st] = sampler_state(tx, G.view_repl ? lv | GB_LEVELS_REPL : flat || G.ab_off ? 1 : lv);
-            if (G.tex_q && !flat) {
-                if (lv > 1) G.st_tex_mip++; else G.st_tex_one3d++;
-            }
-            flags |= 16u << st;
-            if (!((x->stage_normalized >> st) & 1)) {       /* coordinates in texels */
-                su[st] = 1.0f / (float)tx->width;
-                sv[st] = 1.0f / (float)tx->height;
-            }
-        }
-        for (st = 0; st < 8; st++) {
-            kb.cw[st][0] = rc->color_icw[st]; kb.cw[st][1] = rc->alpha_icw[st];
-            kb.cw[st][2] = rc->color_ocw[st]; kb.cw[st][3] = rc->alpha_ocw[st];
-            unpack_argb(rc->factor0[st], kb.f0[st]);
-            unpack_argb(rc->factor1[st], kb.f1[st]);
-        }
-        kb.fin[0] = rc->final0; kb.fin[1] = rc->final1;
-        kb.fin[2] = rc->control; kb.fin[3] = rc->stage_program;
-        unpack_argb(rc->final_c0, kb.fc0);
-        unpack_argb(rc->final_c1, kb.fc1);
-        kb.fogc[0] = (x->fog_color & 0xFF) / 255.0f;         /* red is in the low byte here */
-        kb.fogc[1] = ((x->fog_color >> 8) & 0xFF) / 255.0f;
-        kb.fogc[2] = ((x->fog_color >> 16) & 0xFF) / 255.0f;
-        kb.misc[3] = x->clip_plane_mode;
-        flags |= 1;
+        combiner_state(x, t, flat, srv, smp, su, sv, &kb, &flags, &tex0_hash);
     } else if (b->texture && (srv[0] = texture_view(b->texture, t, &lv)) != NULL) {
         tex0_hash = G.view_hash0;
         smp[0] = sampler_state(b->texture, G.view_repl ? lv | GB_LEVELS_REPL : flat || G.ab_off ? 1 : lv);
@@ -2880,36 +2934,11 @@ static void gb_draw(const Nv2aSurface *s, const Nv2aBatch *b)
     offset = G.vb_used;
     G.vb_used += n * (uint32_t)sizeof(GbVertex);
 
-    if (SUCCEEDED(ID3D11DeviceContext_Map(G.ctx, (ID3D11Resource *)G.cb, 0,
-                                          D3D11_MAP_WRITE_DISCARD, 0, &map))) {
-        memcpy(map.pData, &kb, sizeof kb);
-        ID3D11DeviceContext_Unmap(G.ctx, (ID3D11Resource *)G.cb, 0);
-    }
-    bf[0] = ((rs->blend_color >> 16) & 0xFF) / 255.0f;
-    bf[1] = ((rs->blend_color >> 8) & 0xFF) / 255.0f;
-    bf[2] = (rs->blend_color & 0xFF) / 255.0f;
-    bf[3] = ((rs->blend_color >> 24) & 0xFF) / 255.0f;
-
     ID3D11DeviceContext_IASetInputLayout(G.ctx, G.layout);
     ID3D11DeviceContext_IASetPrimitiveTopology(G.ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ID3D11DeviceContext_IASetVertexBuffers(G.ctx, 0, 1, &G.vb, &stride, &offset);
     ID3D11DeviceContext_VSSetShader(G.ctx, G.vs, NULL, 0);
-    /* GB_D3D11_MSAA: a cut-out 3D batch (alpha test GREATER or GEQUAL)
-     * smooths its edges across the samples. In a match every such batch also
-     * blends; coverage and blending combine (the samples covered are blended
-     * as before), which matters where the test cuts high (reference 192: a
-     * hard edge at three quarters opacity). */
-    ps = G.ps;
-    ID3D11DeviceContext_PSSetShader(G.ctx, ps, NULL, 0);
-    ID3D11DeviceContext_PSSetConstantBuffers(G.ctx, 0, 1, &G.cb);
-    ID3D11DeviceContext_PSSetShaderResources(G.ctx, 0, 4, srv);
-    ID3D11DeviceContext_PSSetSamplers(G.ctx, 0, 4, smp);
-    ID3D11DeviceContext_RSSetState(G.ctx, clipped ? G.raster_clip : G.raster);
-    if (clipped)
-        ID3D11DeviceContext_RSSetScissorRects(G.ctx, 1, &clip_rect);
-    ID3D11DeviceContext_OMSetBlendState(G.ctx, blend_state(rs), bf, 0xFFFFFFFFu);
-    ID3D11DeviceContext_OMSetDepthStencilState(G.ctx, depth_state(rs, d != NULL),
-                                               rs->stencil_ref & 0xFF);
+    pixel_and_output_state(rs, &kb, flat, srv, smp, clipped, &clip_rect, d != NULL);
     ID3D11DeviceContext_Draw(G.ctx, n, 0);
 
     t->dirty = 1;
@@ -2923,6 +2952,71 @@ static void gb_draw(const Nv2aSurface *s, const Nv2aBatch *b)
      * same batches with the same textures get the same number. */
     G.fl_sig = (G.fl_sig ^ (b->count + ((uint64_t)(b->texture ? b->texture->offset : 0) << 20)))
                * 0x100000001B3ull;
+}
+
+/* A batch that runs the title's vertex program, offered by the executor
+ * before it transforms the batch (the project's toolkit patch). With
+ * GB_VSH_GPU=1 the graphics card runs the program for a 3D batch
+ * (gb_vsh_gpu.c); returns 0 to leave the batch to the executor, which then
+ * transforms it and calls gb_draw as without this. A flat batch (menus, HUD,
+ * text, films) always goes that way, so everything gb_draw does with flat
+ * batches is untouched. */
+static int gb_draw_program(const Nv2aSurface *s, const Nv2aProgramBatch *pb)
+{
+    const Nv2aRenderState *rs = pb->state;
+    const Nv2aBatchExt *x = pb->ext;
+    ID3D11ShaderResourceView *srv[4] = { NULL, NULL, NULL, NULL };
+    ID3D11SamplerState *smp[4];
+    GbVshGeometry g;
+    GbConstants kb;
+    GbTarget *t;
+    GbDepth *d = NULL;
+    D3D11_RECT clip_rect;
+    float su[4], sv[4];
+    uint32_t flags = 0;
+    uint64_t tex0_hash = 0;
+    int st, flat, clipped;
+
+    if (!gb_init() || !gb_vsh_gpu_init(G.dev, G.ctx) || !gb_vsh_gpu_take(pb, G.frame))
+        return 0;
+    if (!(t = target_for(s)) || !gb_vsh_gpu_geometry(pb, &g))
+        return 0;
+    if (rs->zeta_va && (rs->depth_test_enable || rs->stencil_enable))
+        d = depth_for(rs->zeta_va, t->rw, t->rh);
+    bind_target(t, d);
+    flat = (G.tex_q || G.msaa > 1) ? 0 : -1;        /* as gb_draw has it for a 3D batch */
+
+    memset(&kb, 0, sizeof kb);
+    for (st = 0; st < 4; st++) {
+        smp[st] = G.present_sampler;
+        su[st] = sv[st] = 1.0f;
+    }
+    combiner_state(x, t, flat, srv, smp, su, sv, &kb, &flags, &tex0_hash);
+    kb.misc[0] = rs->alpha_test_enable ? (uint32_t)compare(rs->alpha_func) : 0;
+    kb.misc[1] = rs->alpha_ref & 0xFF;
+    kb.misc[2] = flags;
+    if (!gb_vsh_gpu_bind(pb, &g, t->w, t->h, su, sv))
+        return 0;                                    /* the processor draws it (and every batch after, if the check failed) */
+
+    /* From here the batch is the card's. What gb_draw notes for a 3D batch: */
+    G.fl_calls++;
+    if (!G.panel_only)
+        G.has3d_cur = 1;
+    G.fr_verts3d += g.tris * 3u;
+    clipped = window_clip(s, rs, t, 1.0f, &clip_rect);
+    pixel_and_output_state(rs, &kb, flat, srv, smp, clipped, &clip_rect, d != NULL);
+    gb_vsh_gpu_draw(&g);
+
+    t->dirty = 1;
+    G.present = t;
+    G.st_draws++;
+    G.st_tris += g.tris;
+    G.fr_tris += g.tris;
+    G.fl_draws++;
+    G.fl_tris += g.tris;
+    G.fl_sig = (G.fl_sig ^ (g.tris * 3u + ((uint64_t)(srv[0] ? x->stage[0].offset : 0) << 20)))
+               * 0x100000001B3ull;
+    return 1;
 }
 
 
@@ -3035,6 +3129,45 @@ static void sync_window(void)
     compute_view();
 }
 
+/* The refresh rate of the display a GDI device name (\\.\DISPLAYn) shows,
+ * exact, from Windows' display paths: 119.88 Hz is 120000/1001 there, where
+ * EnumDisplaySettings says 119. 0 when Windows does not say. */
+static double display_path_hz(const char *device)
+{
+    UINT32 np = 0, nm = 0, i;
+    DISPLAYCONFIG_PATH_INFO *paths;
+    DISPLAYCONFIG_MODE_INFO *modes;
+    double hz = 0.0;
+
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &np, &nm) != ERROR_SUCCESS || !np)
+        return 0.0;
+    paths = (DISPLAYCONFIG_PATH_INFO *)calloc(np, sizeof *paths);
+    modes = (DISPLAYCONFIG_MODE_INFO *)calloc(nm ? nm : 1, sizeof *modes);
+    if (paths && modes && QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &np, paths, &nm, modes, NULL) == ERROR_SUCCESS) {
+        for (i = 0; i < np; i++) {
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME src;
+            char name[CCHDEVICENAME];
+            const DISPLAYCONFIG_RATIONAL *r = &paths[i].targetInfo.refreshRate;
+
+            memset(&src, 0, sizeof src);
+            src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            src.header.size = sizeof src;
+            src.header.adapterId = paths[i].sourceInfo.adapterId;
+            src.header.id = paths[i].sourceInfo.id;
+            if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS)
+                continue;
+            WideCharToMultiByte(CP_ACP, 0, src.viewGdiDeviceName, -1, name, sizeof name, NULL, NULL);
+            if (!_stricmp(name, device) && r->Denominator) {
+                hz = (double)r->Numerator / (double)r->Denominator;
+                break;
+            }
+        }
+    }
+    free(paths);
+    free(modes);
+    return hz;
+}
+
 /* Which monitor the window is on, its refresh rate, and so how to present.
  * Checked when the window has moved or the display settings changed. */
 static void read_display(void)
@@ -3069,18 +3202,48 @@ static void read_display(void)
         return;
     G.mon = m;
     G.mon_hz = hz;
-    /* The frame limit keeps game time at 60 frames a second whatever happens
-     * here. A sync interval only decides how each frame meets the display: it
-     * holds every frame for n refreshes, which is even only when the rate is a
-     * whole multiple of 60. "auto" uses it then and nowhere else. */
-    if (G.vsync_req >= 0)
-        G.sync = (UINT)G.vsync_req;
-    else
-        G.sync = (hz >= 60 && hz <= 240 && hz % 60 == 0) ? (UINT)(hz / 60) : 0;
-    G.st_hz_qpc0 = 0;
-    gb_log("[D3D11] on monitor %s, %ldx%ld at %d Hz: present with sync interval %u\n",
-            mi.szDevice, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
-            hz, G.sync);
+    /* The frame limit keeps game time at the game's step rate whatever
+     * happens here. A sync interval only decides how each frame meets the
+     * display: it holds every frame for n refreshes, which is even only when
+     * the refresh is a whole multiple of the step rate. "auto" uses it then and
+     * nowhere else.
+     * At the game's own 60 the rule is the one every release has had (the
+     * whole-number rate Windows reports, 60/120/180/240 Hz). At any other step
+     * rate n = refresh / rate, from the exact refresh, within 0.5% of a whole
+     * number of 1 or more; otherwise 0. Before, auto used refresh / 60 at
+     * every rate, so a 120-step game on a 120 Hz screen presented with
+     * interval 2: Present then waited two refreshes a picture and the game
+     * ran at 60 steps a second, half speed, wherever the frame drop did not
+     * act. */
+    {
+        int rate = gb_game_hz();
+        double exact = 0.0;
+
+        if (G.vsync_req >= 0)
+            G.sync = (UINT)G.vsync_req;
+        else if (rate == 60)
+            G.sync = (hz >= 60 && hz <= 240 && hz % 60 == 0) ? (UINT)(hz / 60) : 0;
+        else {
+            double r, n;
+            exact = display_path_hz(mi.szDevice);
+            r = (exact > 0.0 ? exact : (double)hz) / (double)rate;
+            n = floor(r + 0.5);
+            G.sync = (rate > 0 && n >= 1.0 && n <= 4.0 && fabs(r - n) <= 0.005 * n) ? (UINT)n : 0;
+        }
+        G.st_hz_qpc0 = 0;
+        if (exact > 0.0)
+            gb_log("[D3D11] on monitor %s, %ldx%ld at %d Hz (%.3f Hz exact), %d steps a second:"
+                   " present with sync interval %u\n",
+                   mi.szDevice, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
+                   hz, exact, rate, G.sync);
+        else
+            gb_log("[D3D11] on monitor %s, %ldx%ld at %d Hz: present with sync interval %u\n",
+                   mi.szDevice, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
+                   hz, G.sync);
+        if (G.vsync_req < 0 && rate != 60 && !G.sync)
+            gb_log("[D3D11] vsync auto: the refresh is not a whole multiple of %d steps a second;"
+                   " pictures are presented as they come\n", rate);
+    }
 }
 
 
@@ -3220,6 +3383,7 @@ presented:
     }
 
     G.frame++;
+    gb_vsh_gpu_frame(G.frame);
     if (G.texmods) {
         gb_tex_frame(G.frame);
         if (InterlockedExchange(&G.dump_screen, 0))
@@ -3272,6 +3436,18 @@ static void gb_draw_locked(const Nv2aSurface *s, const Nv2aBatch *b)
     LeaveCriticalSection(&gb_lock);
 }
 
+static int gb_draw_program_locked(const Nv2aSurface *s, const Nv2aProgramBatch *b)
+{
+    extern void gb_cpu_executor(void);
+    int taken;
+
+    gb_cpu_executor();      /* src/gb_cpu.c: once, on the executor thread */
+    EnterCriticalSection(&gb_lock);
+    taken = gb_draw_program(s, b);
+    LeaveCriticalSection(&gb_lock);
+    return taken;
+}
+
 static void gb_flip_locked(void)
 {
     EnterCriticalSection(&gb_lock);
@@ -3297,8 +3473,14 @@ int gb_d3d11_reflip(void)
 
 int gb_d3d11_install(void)
 {
-    static const Nv2aBackend backend = { gb_clear_locked, gb_draw_locked, gb_flip_locked };
+    /* The executor offers vertex-program batches only to a back end that
+     * takes them: with GB_VSH_GPU unset it sees no draw_program at all and
+     * transforms every batch itself, exactly as without the offer. */
+    static const Nv2aBackend backend = { gb_clear_locked, gb_draw_locked, gb_flip_locked, NULL };
+    static const Nv2aBackend backend_vsh = { gb_clear_locked, gb_draw_locked, gb_flip_locked,
+                                              gb_draw_program_locked };
+    const char *vsh = getenv("GB_VSH_GPU");
     InitializeCriticalSectionAndSpinCount(&gb_lock, 4000);
-    nv2a_backend_register(&backend);
+    nv2a_backend_register(vsh && vsh[0] && vsh[0] != '0' ? &backend_vsh : &backend);
     return 1;
 }
